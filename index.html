@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Spinning Snub Disphenoid Visualizer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/renderers/CSS2DRenderer.js"></script>
+<style>
+  body {
+    font-family: 'Inter', sans-serif;
+    background-color: #111827; 
+    color: #e5e7eb; 
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    margin: 0;
+    padding: 1rem;
+    overflow: hidden;
+  }
+  #visualizationContainer {
+    width: 100%;
+    max-width: 64rem; 
+    background-color: #1f2937; 
+    padding: 1.5rem;
+    border-radius: 0.5rem; 
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); 
+  }
+  h1 {
+    font-size: 1.875rem; 
+    font-weight: 600; 
+    margin-bottom: 1rem; 
+    color: #f9fafb; 
+    text-align: center;
+  }
+  #canvasContainer {
+    width: 100%;
+    height: 60vh; 
+    min-height: 400px;
+    max-height: 700px;
+    border: 1px solid #374151; 
+    border-radius: 0.375rem; 
+    margin-bottom: 1rem;
+    position: relative;
+    background-color: #000000; 
+  }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 0.75rem; 
+    margin-bottom: 0.5rem;
+  }
+  .controls button {
+    background-color: #3b82f6; 
+    color: white;
+    font-weight: 500; 
+    padding: 0.5rem 1rem; 
+    border-radius: 0.375rem; 
+    border: none;
+    cursor: pointer;
+    transition: background-color 0.2s;
+  }
+  .controls button:hover {
+    background-color: #2563eb; 
+  }
+   .controls button:disabled {
+    background-color: #6b7280; 
+    cursor: not-allowed;
+  }
+  .controls label {
+    margin-right: 0.5rem; 
+    color: #d1d5db; 
+  }
+  .controls input[type="range"] {
+    width: 120px; 
+    cursor: pointer;
+  }
+  .vertex-label {
+    color: #ffffff;
+    background-color: rgba(0, 0, 0, 0.75); 
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-family: sans-serif;
+    pointer-events: none; 
+  }
+</style>
+</head>
+<body>
+
+<div id="visualizationContainer">
+  <h1>Spinning Snub Disphenoid</h1>
+  <div class="controls">
+    <button id="pauseButton">Pause</button>
+    <div>
+      <label for="speedSlider">Speed:</label>
+      <input type="range" id="speedSlider" min="0" max="100" value="20">
+    </div>
+    <button id="toggleShapeButton">Show Solid</button>
+    <button id="toggleLabelsButton">Hide Labels</button> 
+    <button id="toggleFaceColorsButton" disabled>Color Faces</button> 
+  </div>
+  <div id="canvasContainer">
+    </div>
+</div>
+
+<script>
+// --- Three.js related variables ---
+let scene, camera, renderer, labelRenderer, modelGroup, orbitControls;
+let wireframeMesh, solidMesh, solidMaterial, solidEdgesMesh; 
+let vertexLabels = []; 
+let raycaster; 
+let animationId;
+let isPaused = false;
+let isSolidView = false; 
+let areLabelsVisible = true; 
+let areFacesColored = false; 
+let rotationSpeed = 0.005;
+
+// --- Color definitions ---
+const J84_FACE_COLORS_PALETTE = [ 
+    new THREE.Color(0xff6347), // Tomato (Red-Orange)
+    new THREE.Color(0x4682b4), // SteelBlue
+    new THREE.Color(0x32cd32), // LimeGreen
+    new THREE.Color(0xffd700), // Gold (Yellow)
+    new THREE.Color(0xffa500), // Orange
+    new THREE.Color(0xda70d6)  // Orchid (Purple-ish)
+];
+let assignedFaceColors = []; 
+
+// --- Vector Math Utilities ---
+function subtractVectors(v1, v2) { return [v1[0] - v2[0], v1[1] - v2[1], v1[2] - v2[2]]; }
+function addVectors(v1, v2) { return [v1[0] + v2[0], v1[1] + v2[1], v1[2] + v2[2]]; }
+function scaleVector(v, s) { return [v[0] * s, v[1] * s, v[2] * s]; }
+function dotProduct(v1, v2) { return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]; }
+function crossProduct(v1, v2) {
+    return [
+        v1[1] * v2[2] - v1[2] * v2[1],
+        v1[2] * v2[0] - v1[0] * v2[2],
+        v1[0] * v2[1] - v1[1] * v2[0]
+    ];
+}
+function normalizeVector(v) {
+    const len = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+    if (len === 0) return [0,0,0];
+    return [v[0]/len, v[1]/len, v[2]/len];
+}
+function vectorLengthSq(v) { return v[0]*v[0] + v[1]*v[1] + v[2]*v[2]; }
+
+
+// --- Calculation Functions ---
+function findQ() {
+    const f = (x) => 2 * x**3 + 11 * x**2 + 4 * x - 1;
+    const df = (x) => 6 * x**2 + 22 * x + 4;
+    let x = 0.16902; const tolerance = 1e-15; let iterations = 0; const maxIterations = 100;
+    while (Math.abs(f(x)) > tolerance && iterations < maxIterations) {
+        const fx = f(x); const dfx = df(x);
+        if (Math.abs(dfx) < 1e-10) { console.error("Newton's method: Derivative is too small."); return NaN; }
+        x = x - fx / dfx; iterations++;
+    }
+    if (iterations >= maxIterations) console.warn("Newton's method: Max iterations reached for q.");
+    return x;
+}
+function calculateRST(q) {
+    if (isNaN(q) || q <= 0) { console.error("Invalid q in calculateRST:", q); return { r: NaN, s: NaN, t: NaN }; }
+    const r = Math.sqrt(q) / 2; const s_num = 1 - q; const s_den = 8 * q;
+    if (s_num < 0 || s_den <= 0) { console.error("Invalid s params:", {s_num, s_den}); return { r, s: NaN, t: NaN}; }
+    const s = Math.sqrt(s_num / s_den); const t_num = 1-q;
+    if(t_num < 0){ console.error("Invalid t param:", {t_num}); return { r, s, t: NaN}; }
+    const t = Math.sqrt(t_num / 2); return { r, s, t };
+}
+function getVertices(r, s, t) { 
+    if (isNaN(r) || isNaN(s) || isNaN(t)) { console.error("Invalid r,s,t in getVertices:", {r,s,t}); return []; }
+    return [
+        { name: "V0", coords: [ t,  0, -r], id: 0 }, { name: "V1", coords: [-t,  0, -r], id: 1 },
+        { name: "V2", coords: [ 0,  t,  r], id: 2 }, { name: "V3", coords: [ 0, -t,  r], id: 3 },
+        { name: "V4", coords: [ 0.5,  0,  s], id: 4 }, { name: "V5", coords: [-0.5,  0,  s], id: 5 },
+        { name: "V6", coords: [ 0,  0.5, -s], id: 6 }, { name: "V7", coords: [ 0, -0.5, -s], id: 7 }
+    ];
+}
+function distanceSq(v1, v2) { return (v1[0]-v2[0])**2 + (v1[1]-v2[1])**2 + (v1[2]-v2[2])**2; }
+
+// --- Face Coloring Logic ---
+const J84_FACES_INDICES = [ 
+    [0,2,4], [0,4,3], [0,3,7], [0,7,6], [0,6,2], 
+    [1,5,2], [1,2,6], [1,6,7], [1,7,3], [1,3,5], 
+    [2,5,4], [3,4,5]  
+];
+const J84_FACE_ADJACENCIES = [ 
+    /*F0(024)*/ [1, 4, 10], /*F1(043)*/ [0, 2, 11], /*F2(037)*/ [1, 3, 8],  /*F3(076)*/ [2, 4, 7],
+    /*F4(062)*/ [3, 0, 6],  /*F5(152)*/ [6, 9, 10], /*F6(126)*/ [5, 7, 4],  /*F7(167)*/ [6, 8, 3],
+    /*F8(173)*/ [7, 9, 2],  /*F9(135)*/ [8, 5, 11], /*F10(254)*/[0, 5, 11], /*F11(345)*/[1, 9, 10]
+];
+
+function computeFaceColors() {
+    assignedFaceColors = new Array(J84_FACES_INDICES.length).fill(null);
+    let assignedColorIndices = new Array(J84_FACES_INDICES.length).fill(-1);
+
+    for (let i = 0; i < J84_FACES_INDICES.length; i++) {
+        let neighborColorIndices = new Set();
+        J84_FACE_ADJACENCIES[i].forEach(adjFaceIndex => {
+            if (assignedColorIndices[adjFaceIndex] !== -1) {
+                neighborColorIndices.add(assignedColorIndices[adjFaceIndex]);
+            }
+        });
+        for (let c = 0; c < J84_FACE_COLORS_PALETTE.length; c++) {
+            if (!neighborColorIndices.has(c)) {
+                assignedColorIndices[i] = c;
+                assignedFaceColors[i] = J84_FACE_COLORS_PALETTE[c];
+                break;
+            }
+        }
+        if (assignedFaceColors[i] === null) { 
+            assignedFaceColors[i] = J84_FACE_COLORS_PALETTE[i % J84_FACE_COLORS_PALETTE.length]; 
+        }
+    }
+}
+
+// --- Geometric Properties Verification ---
+function verifyGeometricProperties(verticesData) { 
+    console.log("\n--- Geometric Property Verification ---");
+    const geomTolerance = 1e-9; 
+
+    const getCoord = (id) => verticesData.find(v => v.id === id)?.coords;
+
+    const p2_prev = getCoord(2), p3_prev = getCoord(3), p6_prev = getCoord(6), p7_prev = getCoord(7);
+    if (p2_prev && p3_prev && p6_prev && p7_prev) {
+        const vec37_prev = subtractVectors(p7_prev, p3_prev), vec76_prev = subtractVectors(p6_prev, p7_prev), vec62_prev = subtractVectors(p2_prev, p6_prev);
+        const dot37_76_prev = dotProduct(vec37_prev, vec76_prev), dot76_62_prev = dotProduct(vec76_prev, vec62_prev);
+        console.log(`1. Perpendicularity (Edges 37,76 & 76,62):`);
+        console.log(`   Dot(3,7 ; 7,6): ${dot37_76_prev.toFixed(10)} (${Math.abs(dot37_76_prev) < geomTolerance ? "Perpendicular" : "NOT Perpendicular"})`);
+        console.log(`   Dot(7,6 ; 6,2): ${dot76_62_prev.toFixed(10)} (${Math.abs(dot76_62_prev) < geomTolerance ? "Perpendicular" : "NOT Perpendicular"})`);
+        const vec_p3_p7_prev = vec37_prev, vec_p3_p6_prev = subtractVectors(p6_prev, p3_prev), vec_p3_p2_prev = subtractVectors(p2_prev, p3_prev);
+        const scalarTripleProduct_prev = dotProduct(vec_p3_p7_prev, crossProduct(vec_p3_p6_prev, vec_p3_p2_prev));
+        console.log(`2. Coplanarity (V2,V3,V6,V7): STP: ${scalarTripleProduct_prev.toFixed(10)} (${Math.abs(scalarTripleProduct_prev) < geomTolerance ? "Coplanar" : "NOT Coplanar"})`);
+    } else {
+        console.warn("Could not perform previous geometric checks due to missing vertices.");
+    }
+    
+    console.log("\n--- New Plane & Symmetry Checks ---");
+    const p0 = getCoord(0), p1 = getCoord(1), p4 = getCoord(4), p5 = getCoord(5);
+    const p2 = getCoord(2), p3 = getCoord(3), p6 = getCoord(6), p7 = getCoord(7);
+
+    if (!p0 || !p1 || !p4 || !p5 || !p2 || !p3 || !p6 || !p7) {
+        console.error("Could not find all required vertices for new plane checks.");
+        return;
+    }
+
+    const vec15 = subtractVectors(p5, p1);
+    const vec14 = subtractVectors(p4, p1);
+    let normal1 = normalizeVector(crossProduct(vec15, vec14));
+
+    const vec37 = subtractVectors(p7, p3);
+    const vec36 = subtractVectors(p6, p3);
+    let normal2 = normalizeVector(crossProduct(vec37, vec36));
+    
+    console.log("Plane 1 (V1,V5,V4,V0) Normal:", normal1.map(c=>c.toFixed(6)).join(', '));
+    console.log("Plane 2 (V3,V7,V6,V2) Normal:", normal2.map(c=>c.toFixed(6)).join(', '));
+
+    const dotNormals = dotProduct(normal1, normal2);
+    console.log(`\n3. Perpendicularity of Planes:`);
+    console.log(`   Dot product of Plane1 Normal and Plane2 Normal: ${dotNormals.toFixed(10)}`);
+    if (Math.abs(dotNormals) < geomTolerance) {
+        console.log("   => Plane (1,5,4,0) IS perpendicular to Plane (3,7,6,2).");
+    } else {
+        console.log("   => Plane (1,5,4,0) IS NOT perpendicular to Plane (3,7,6,2).");
+    }
+
+    console.log(`\n4. Symmetry Checks (Bisection & Congruency):`);
+    function checkReflection(ptA_coords, ptB_coords, planePoint_coords, planeNormal_coords, ptAName, ptBName, planeName) {
+        const midpoint = scaleVector(addVectors(ptA_coords, ptB_coords), 0.5);
+        const vecPlaneToMidpoint = subtractVectors(midpoint, planePoint_coords);
+        const midpointOnPlane = Math.abs(dotProduct(vecPlaneToMidpoint, planeNormal_coords)) < geomTolerance;
+        const vecAB = subtractVectors(ptB_coords, ptA_coords);
+        const normalizedVecAB = normalizeVector(vecAB);
+        const dotAB_Normal = Math.abs(dotProduct(normalizedVecAB, planeNormal_coords)); 
+        const parallelToNormal = Math.abs(dotAB_Normal - 1.0) < geomTolerance;
+        console.log(`   Reflection of ${ptAName} to ${ptBName} across ${planeName}:`);
+        console.log(`     Midpoint on plane: ${midpointOnPlane} (Dot: ${dotProduct(vecPlaneToMidpoint, planeNormal_coords).toFixed(10)})`);
+        console.log(`     Vector AB parallel to Normal: ${parallelToNormal} (Dot of normalized: ${dotAB_Normal.toFixed(10)})`);
+        return midpointOnPlane && parallelToNormal;
+    }
+
+    console.log(`\n   Symmetry across Plane 1 (V1,V5,V4,V0), using V1 as plane point:`);
+    let sym1_V2V3 = checkReflection(p2, p3, p1, normal1, "V2", "V3", "Plane1");
+    let sym1_V6V7 = checkReflection(p6, p7, p1, normal1, "V6", "V7", "Plane1");
+    if (sym1_V2V3 && sym1_V6V7) {
+        console.log("   => Plane 1 appears to be a plane of symmetry.");
+    } else {
+        console.log("   => Plane 1 DOES NOT appear to be a full plane of symmetry based on these pairs.");
+    }
+
+    console.log(`\n   Symmetry across Plane 2 (V3,V7,V6,V2), using V3 as plane point:`);
+    let sym2_V0V1 = checkReflection(p0, p1, p3, normal2, "V0", "V1", "Plane2");
+    let sym2_V4V5 = checkReflection(p4, p5, p3, normal2, "V4", "V5", "Plane2");
+     if (sym2_V0V1 && sym2_V4V5) {
+        console.log("   => Plane 2 appears to be a plane of symmetry.");
+    } else {
+        console.log("   => Plane 2 DOES NOT appear to be a full plane of symmetry based on these pairs.");
+    }
+    console.log("-----------------------------------------");
+}
+
+
+// --- Main Calculation and Visualization Function ---
+function performCalculationsAndSetupVisualization() {
+    console.log("Snub Disphenoid Calculator & Visualizer\nBased on formulas from polytope.miraheze.org\nEdge length is assumed to be 1.\n-----------------------------------------");
+    console.log("Calculating parameters...");
+    const q = findQ();
+    if (isNaN(q)) { console.error("Fatal: Could not calculate 'q'."); alert("Error: 'q' calc failed."); return; }
+    const { r, s, t } = calculateRST(q);
+    if (isNaN(r) || isNaN(s) || isNaN(t)) { console.error("Fatal: Could not calculate 'r,s,t'."); alert("Error: 'r,s,t' calc failed."); return; }
+    const verticesObjects = getVertices(r, s, t); 
+    if (verticesObjects.length === 0) { console.error("Fatal: Could not generate vertices."); alert("Error: Vertex generation failed."); return; }
+    const numVertices = verticesObjects.length;
+    const centroid = [0,0,0];
+    verticesObjects.forEach(v => { centroid[0]+=v.coords[0]; centroid[1]+=v.coords[1]; centroid[2]+=v.coords[2]; });
+    centroid[0]/=numVertices; centroid[1]/=numVertices; centroid[2]/=numVertices;
+    const centeredVerticesCoords = verticesObjects.map(v => subtractVectors(v.coords, centroid));
+    const centeredVerticesDataForLabels = verticesObjects.map((v,i)=>({id:v.id, coords:centeredVerticesCoords[i]}));
+    const edges = []; 
+    const edgeLengthSqThresh = 1.0, tolerance = 1e-5;
+    for (let i=0; i<verticesObjects.length; i++) {
+        for (let j=i+1; j<verticesObjects.length; j++) {
+            if (Math.abs(distanceSq(verticesObjects[i].coords, verticesObjects[j].coords) - edgeLengthSqThresh) < tolerance) {
+                edges.push({v1:verticesObjects[i],v2:verticesObjects[j],dist:1.0});
+            }
+        }
+    }
+    console.log("--- Calculated Parameters ---");
+    console.log(`q ≈ ${q.toFixed(10)}, r ≈ ${r.toFixed(10)}, s ≈ ${s.toFixed(10)}, t ≈ ${t.toFixed(10)}`);
+    console.log("\n--- Original Vertices (8) ---");
+    verticesObjects.forEach(v => console.log(`${v.name} (ID ${v.id}): (${v.coords.map(c => c.toFixed(6)).join(', ')})`));
+    console.log(`\n--- Edges Found (${edges.length}) --- ${edges.length === 18 ? "(Correct)" : "(Incorrect!)"}`);
+    edges.forEach((edge, idx) => console.log(`${(idx+1).toString().padStart(2,' ')}: ${edge.v1.name}<->${edge.v2.name} (D:1.000000)`));
+    console.log("-----------------------------------------");
+    
+    verifyGeometricProperties(verticesObjects); 
+    
+    computeFaceColors(); 
+
+    console.log("Initializing 3D Visualization...");
+    setupThreeJSVisualization(centeredVerticesCoords, centeredVerticesDataForLabels, edges);
+}
+
+// --- Three.js Visualization Setup ---
+function setupThreeJSVisualization(centeredVertexPositions, centeredLabelData, originalEdges) {
+    const canvasContainer = document.getElementById('canvasContainer');
+    while (canvasContainer.firstChild) canvasContainer.removeChild(canvasContainer.firstChild);
+    if (animationId) cancelAnimationFrame(animationId);
+
+    scene = new THREE.Scene();
+    raycaster = new THREE.Raycaster(); 
+    const aspect = canvasContainer.clientWidth / canvasContainer.clientHeight;
+    camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
+    camera.position.set(1.2, 1.2, 2.2);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    canvasContainer.appendChild(renderer.domElement);
+
+    labelRenderer = new THREE.CSS2DRenderer();
+    labelRenderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.top = '0px';
+    labelRenderer.domElement.style.pointerEvents = 'none';
+    canvasContainer.appendChild(labelRenderer.domElement);
+
+    orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
+    orbitControls.enableDamping = true; orbitControls.dampingFactor = 0.05;
+    orbitControls.minDistance = 0.5; orbitControls.maxDistance = 10;
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2); dirLight.position.set(1.5,2,1); scene.add(dirLight);
+
+    modelGroup = new THREE.Group(); 
+    scene.add(modelGroup);
+
+    // --- Wireframe Mesh (for wireframe mode) ---
+    const wireframePoints = [];
+    originalEdges.forEach(edge => {
+        wireframePoints.push(...centeredVertexPositions[edge.v1.id]);
+        wireframePoints.push(...centeredVertexPositions[edge.v2.id]);
+    });
+    const wireframeGeom = new THREE.BufferGeometry();
+    wireframeGeom.setAttribute('position', new THREE.Float32BufferAttribute(wireframePoints, 3));
+    const wireframeMaterial = new THREE.LineBasicMaterial({ color: 0x00dd00, linewidth: 2 }); 
+    wireframeMesh = new THREE.LineSegments(wireframeGeom, wireframeMaterial);
+    modelGroup.add(wireframeMesh);
+    
+    // --- Solid Mesh (Non-indexed for flat face colors) ---
+    const solidGeometry = new THREE.BufferGeometry();
+    const positionsArrayForSolid = [];
+    const colorsArrayForSolid = [];
+
+    J84_FACES_INDICES.forEach((faceVertexIds, faceIndex) => {
+        const faceColor = assignedFaceColors[faceIndex];
+        faceVertexIds.forEach(vertexId => {
+            positionsArrayForSolid.push(...centeredVertexPositions[vertexId]);
+            colorsArrayForSolid.push(faceColor.r, faceColor.g, faceColor.b);
+        });
+    });
+
+    solidGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positionsArrayForSolid, 3));
+    solidGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colorsArrayForSolid, 3));
+    solidGeometry.computeVertexNormals(); // This will compute face normals for non-indexed geometry
+    
+    solidMaterial = new THREE.MeshPhongMaterial({ 
+        shininess: 80, 
+        specular: 0x222222,
+        flatShading: true,
+        vertexColors: false, // Default to monochrome
+        color: 0x6082b6,      // Default monochrome color
+        polygonOffset: true,      
+        polygonOffsetFactor: 1,   
+        polygonOffsetUnits: 1     
+    });
+    solidMesh = new THREE.Mesh(solidGeometry, solidMaterial);
+    solidMesh.visible = false; 
+    modelGroup.add(solidMesh);
+
+    // --- Edge Overlay for Solid Mesh ---
+    // Recreate EdgesGeometry from the new non-indexed solidGeometry
+    const edgesGeometry = new THREE.EdgesGeometry(solidMesh.geometry, 1); 
+    const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1.5 });
+    solidEdgesMesh = new THREE.LineSegments(edgesGeometry, edgeMaterial);
+    solidEdgesMesh.visible = false; 
+    modelGroup.add(solidEdgesMesh);
+
+
+    vertexLabels = []; 
+    centeredLabelData.forEach(vertex => {
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'vertex-label';
+        labelDiv.textContent = vertex.id;
+        const label = new THREE.CSS2DObject(labelDiv);
+        label.position.fromArray(vertex.coords); 
+        modelGroup.add(label); 
+        vertexLabels.push(label); 
+    });
+    
+    isPaused = false; document.getElementById('pauseButton').textContent = 'Pause';
+    isSolidView = false; document.getElementById('toggleShapeButton').textContent = 'Show Solid';
+    areLabelsVisible = true; document.getElementById('toggleLabelsButton').textContent = 'Hide Labels'; 
+    areFacesColored = false; 
+    const toggleFaceColorsBtn = document.getElementById('toggleFaceColorsButton');
+    toggleFaceColorsBtn.textContent = 'Color Faces';
+    toggleFaceColorsBtn.disabled = !isSolidView;
+
+    wireframeMesh.visible = !isSolidView;
+    solidMesh.visible = isSolidView;
+    if (solidEdgesMesh) solidEdgesMesh.visible = isSolidView; 
+    
+    rotationSpeed = parseFloat(document.getElementById('speedSlider').value) / 2000;
+
+    animate();
+    window.addEventListener('resize', onWindowResize, false);
+}
+
+function onWindowResize() {
+    const canvasContainer = document.getElementById('canvasContainer');
+    if (!camera || !renderer || !labelRenderer || !canvasContainer || canvasContainer.clientWidth === 0 || canvasContainer.clientHeight === 0) return;
+    const newWidth = canvasContainer.clientWidth, newHeight = canvasContainer.clientHeight;
+    camera.aspect = newWidth / newHeight; camera.updateProjectionMatrix();
+    renderer.setSize(newWidth, newHeight); labelRenderer.setSize(newWidth, newHeight);
+}
+
+function animate() {
+    animationId = requestAnimationFrame(animate);
+    if (orbitControls) orbitControls.update();
+    if (!isPaused && modelGroup) {
+        modelGroup.rotation.x += rotationSpeed * 0.3;
+        modelGroup.rotation.y += rotationSpeed * 0.7;
+        modelGroup.rotation.z += rotationSpeed * 0.1;
+    }
+    if (camera) camera.updateMatrixWorld(true); 
+    if (modelGroup) modelGroup.updateMatrixWorld(true); 
+
+    if (vertexLabels.length > 0) {
+        if (!areLabelsVisible) { 
+            vertexLabels.forEach(label => { label.visible = false; });
+        } else { 
+            if (solidMesh && solidMesh.visible && camera && raycaster) { 
+                const cameraWorldPosition = new THREE.Vector3();
+                camera.getWorldPosition(cameraWorldPosition); 
+                vertexLabels.forEach(label => {
+                    const labelWorldPosition = new THREE.Vector3();
+                    label.getWorldPosition(labelWorldPosition); 
+                    const directionToLabel = new THREE.Vector3().subVectors(labelWorldPosition, cameraWorldPosition);
+                    const distanceToLabel = directionToLabel.length(); 
+                    if (distanceToLabel === 0) { label.visible = true; return; }
+                    directionToLabel.normalize();
+                    raycaster.set(cameraWorldPosition, directionToLabel);
+                    const intersects = raycaster.intersectObject(solidMesh, false);
+                    if (intersects.length > 0 && intersects[0].distance < distanceToLabel - 0.01) { 
+                        label.visible = false;
+                    } else {
+                        label.visible = true;
+                    }
+                });
+            } else { 
+                vertexLabels.forEach(label => { label.visible = true; });
+            }
+        }
+    }
+
+    if (renderer && scene && camera) renderer.render(scene, camera);
+    if (labelRenderer && scene && camera) labelRenderer.render(scene, camera);
+}
+
+// --- Event Listeners ---
+document.getElementById('pauseButton').addEventListener('click', () => {
+    isPaused = !isPaused;
+    document.getElementById('pauseButton').textContent = isPaused ? 'Resume' : 'Pause';
+});
+document.getElementById('speedSlider').addEventListener('input', (event) => {
+    rotationSpeed = parseFloat(event.target.value) / 2000;
+});
+document.getElementById('toggleShapeButton').addEventListener('click', () => {
+    isSolidView = !isSolidView;
+    const toggleFaceColorsBtn = document.getElementById('toggleFaceColorsButton');
+    if (solidMesh && wireframeMesh && solidEdgesMesh) { 
+        solidMesh.visible = isSolidView;
+        wireframeMesh.visible = !isSolidView;
+        solidEdgesMesh.visible = isSolidView; 
+        
+        document.getElementById('toggleShapeButton').textContent = isSolidView ? 'Show Wireframe' : 'Show Solid';
+        toggleFaceColorsBtn.disabled = !isSolidView; 
+
+        if (isSolidView && solidMaterial) { 
+            solidMaterial.vertexColors = areFacesColored;
+             if (areFacesColored) {
+                solidMaterial.color.set(0xffffff); 
+                solidMaterial.shininess = 10;
+                solidMaterial.specular.set(0x111111);
+            } else {
+                solidMaterial.color.set(0x6082b6); 
+                solidMaterial.shininess = 80;
+                solidMaterial.specular.set(0x222222);
+            }
+            solidMaterial.needsUpdate = true;
+        }
+    }
+});
+document.getElementById('toggleLabelsButton').addEventListener('click', () => {
+    areLabelsVisible = !areLabelsVisible;
+    document.getElementById('toggleLabelsButton').textContent = areLabelsVisible ? 'Hide Labels' : 'Show Labels';
+});
+document.getElementById('toggleFaceColorsButton').addEventListener('click', function() {
+    if (!isSolidView || !solidMaterial) return; 
+    areFacesColored = !areFacesColored;
+    
+    solidMaterial.vertexColors = areFacesColored;
+    if (areFacesColored) {
+        solidMaterial.color.set(0xffffff); 
+        solidMaterial.shininess = 10;      
+        solidMaterial.specular.set(0x111111); 
+    } else {
+        solidMaterial.color.set(0x6082b6); 
+        solidMaterial.shininess = 80;      
+        solidMaterial.specular.set(0x222222); 
+    }
+    solidMaterial.needsUpdate = true; 
+    
+    this.textContent = areFacesColored ? 'Monochrome' : 'Color Faces';
+});
+
+// --- Load and Cleanup ---
+window.onload = performCalculationsAndSetupVisualization;
+window.addEventListener('beforeunload', () => {
+    if (animationId) cancelAnimationFrame(animationId);
+    if (renderer) renderer.dispose();
+    if (labelRenderer && labelRenderer.domElement.parentNode) {
+        labelRenderer.domElement.parentNode.removeChild(labelRenderer.domElement.parentNode);
+    }
+    if (scene) {
+        scene.traverse(object => {
+            if(object.geometry) object.geometry.dispose();
+            if(object.material){
+                if(Array.isArray(object.material)) object.material.forEach(mat => {if(mat.dispose) mat.dispose();});
+                else if(object.material.dispose) object.material.dispose();
+            }
+            if(object.element && object.element.parentNode) object.element.parentNode.removeChild(object.element);
+        });
+    }
+    window.removeEventListener('resize', onWindowResize);
+});
+
+</script>
+</body>
+</html>
+
