@@ -176,7 +176,7 @@ function calculateRST(q) {
 }
 function getVertices(r, s, t) { 
     if (isNaN(r) || isNaN(s) || isNaN(t)) { console.error("Invalid r,s,t in getVertices:", {r,s,t}); return []; }
-    return [
+    return [ // These are the original, uncentered vertex coordinates
         { name: "V0", coords: [ t,  0, -r], id: 0 }, { name: "V1", coords: [-t,  0, -r], id: 1 },
         { name: "V2", coords: [ 0,  t,  r], id: 2 }, { name: "V3", coords: [ 0, -t,  r], id: 3 },
         { name: "V4", coords: [ 0.5,  0,  s], id: 4 }, { name: "V5", coords: [-0.5,  0,  s], id: 5 },
@@ -200,7 +200,6 @@ const J84_FACE_ADJACENCIES = [
 function computeFaceColors() {
     assignedFaceColors = new Array(J84_FACES_INDICES.length).fill(null);
     let assignedColorIndices = new Array(J84_FACES_INDICES.length).fill(-1);
-
     for (let i = 0; i < J84_FACES_INDICES.length; i++) {
         let neighborColorIndices = new Set();
         J84_FACE_ADJACENCIES[i].forEach(adjFaceIndex => {
@@ -222,11 +221,13 @@ function computeFaceColors() {
 }
 
 // --- Geometric Properties Verification ---
-function verifyGeometricProperties(verticesData) { 
+function verifyGeometricProperties(verticesObjects, edges) { 
     console.log("\n--- Geometric Property Verification ---");
     const geomTolerance = 1e-9; 
 
-    const getCoord = (id) => verticesData.find(v => v.id === id)?.coords;
+    const allVertexCoords = {}; 
+    verticesObjects.forEach(v => { allVertexCoords[v.id] = v.coords; });
+    const getCoord = (id) => allVertexCoords[id];
 
     const p2_prev = getCoord(2), p3_prev = getCoord(3), p6_prev = getCoord(6), p7_prev = getCoord(7);
     if (p2_prev && p3_prev && p6_prev && p7_prev) {
@@ -238,40 +239,24 @@ function verifyGeometricProperties(verticesData) {
         const vec_p3_p7_prev = vec37_prev, vec_p3_p6_prev = subtractVectors(p6_prev, p3_prev), vec_p3_p2_prev = subtractVectors(p2_prev, p3_prev);
         const scalarTripleProduct_prev = dotProduct(vec_p3_p7_prev, crossProduct(vec_p3_p6_prev, vec_p3_p2_prev));
         console.log(`2. Coplanarity (V2,V3,V6,V7): STP: ${scalarTripleProduct_prev.toFixed(10)} (${Math.abs(scalarTripleProduct_prev) < geomTolerance ? "Coplanar" : "NOT Coplanar"})`);
-    } else {
-        console.warn("Could not perform previous geometric checks due to missing vertices.");
     }
     
-    console.log("\n--- New Plane & Symmetry Checks ---");
     const p0 = getCoord(0), p1 = getCoord(1), p4 = getCoord(4), p5 = getCoord(5);
     const p2 = getCoord(2), p3 = getCoord(3), p6 = getCoord(6), p7 = getCoord(7);
 
     if (!p0 || !p1 || !p4 || !p5 || !p2 || !p3 || !p6 || !p7) {
-        console.error("Could not find all required vertices for new plane checks.");
-        return;
+        console.error("Could not find all required vertices for new plane checks."); return;
     }
 
-    const vec15 = subtractVectors(p5, p1);
-    const vec14 = subtractVectors(p4, p1);
+    const vec15 = subtractVectors(p5, p1), vec14 = subtractVectors(p4, p1);
     let normal1 = normalizeVector(crossProduct(vec15, vec14));
-
-    const vec37 = subtractVectors(p7, p3);
-    const vec36 = subtractVectors(p6, p3);
+    const vec37 = subtractVectors(p7, p3), vec36 = subtractVectors(p6, p3);
     let normal2 = normalizeVector(crossProduct(vec37, vec36));
     
-    console.log("Plane 1 (V1,V5,V4,V0) Normal:", normal1.map(c=>c.toFixed(6)).join(', '));
-    console.log("Plane 2 (V3,V7,V6,V2) Normal:", normal2.map(c=>c.toFixed(6)).join(', '));
-
     const dotNormals = dotProduct(normal1, normal2);
-    console.log(`\n3. Perpendicularity of Planes:`);
-    console.log(`   Dot product of Plane1 Normal and Plane2 Normal: ${dotNormals.toFixed(10)}`);
-    if (Math.abs(dotNormals) < geomTolerance) {
-        console.log("   => Plane (1,5,4,0) IS perpendicular to Plane (3,7,6,2).");
-    } else {
-        console.log("   => Plane (1,5,4,0) IS NOT perpendicular to Plane (3,7,6,2).");
-    }
+    console.log(`\n3. Perpendicularity of Planes (V1,V5,V4,V0) and (V3,V7,V6,V2):`);
+    console.log(`   Dot product of Normals: ${dotNormals.toFixed(10)} (${Math.abs(dotNormals) < geomTolerance ? "Perpendicular" : "NOT Perpendicular"})`);
 
-    console.log(`\n4. Symmetry Checks (Bisection & Congruency):`);
     function checkReflection(ptA_coords, ptB_coords, planePoint_coords, planeNormal_coords, ptAName, ptBName, planeName) {
         const midpoint = scaleVector(addVectors(ptA_coords, ptB_coords), 0.5);
         const vecPlaneToMidpoint = subtractVectors(midpoint, planePoint_coords);
@@ -280,29 +265,93 @@ function verifyGeometricProperties(verticesData) {
         const normalizedVecAB = normalizeVector(vecAB);
         const dotAB_Normal = Math.abs(dotProduct(normalizedVecAB, planeNormal_coords)); 
         const parallelToNormal = Math.abs(dotAB_Normal - 1.0) < geomTolerance;
-        console.log(`   Reflection of ${ptAName} to ${ptBName} across ${planeName}:`);
-        console.log(`     Midpoint on plane: ${midpointOnPlane} (Dot: ${dotProduct(vecPlaneToMidpoint, planeNormal_coords).toFixed(10)})`);
-        console.log(`     Vector AB parallel to Normal: ${parallelToNormal} (Dot of normalized: ${dotAB_Normal.toFixed(10)})`);
         return midpointOnPlane && parallelToNormal;
     }
-
-    console.log(`\n   Symmetry across Plane 1 (V1,V5,V4,V0), using V1 as plane point:`);
+    console.log(`\n4. Symmetry Checks:`);
+    console.log(`   Symmetry across Plane 1 (V1,V5,V4,V0):`);
     let sym1_V2V3 = checkReflection(p2, p3, p1, normal1, "V2", "V3", "Plane1");
     let sym1_V6V7 = checkReflection(p6, p7, p1, normal1, "V6", "V7", "Plane1");
-    if (sym1_V2V3 && sym1_V6V7) {
-        console.log("   => Plane 1 appears to be a plane of symmetry.");
-    } else {
-        console.log("   => Plane 1 DOES NOT appear to be a full plane of symmetry based on these pairs.");
-    }
-
-    console.log(`\n   Symmetry across Plane 2 (V3,V7,V6,V2), using V3 as plane point:`);
+    console.log(`     V2 reflects to V3: ${sym1_V2V3}, V6 reflects to V7: ${sym1_V6V7}. Plane 1 symmetry: ${sym1_V2V3 && sym1_V6V7}`);
+    console.log(`   Symmetry across Plane 2 (V3,V7,V6,V2):`);
     let sym2_V0V1 = checkReflection(p0, p1, p3, normal2, "V0", "V1", "Plane2");
     let sym2_V4V5 = checkReflection(p4, p5, p3, normal2, "V4", "V5", "Plane2");
-     if (sym2_V0V1 && sym2_V4V5) {
-        console.log("   => Plane 2 appears to be a plane of symmetry.");
-    } else {
-        console.log("   => Plane 2 DOES NOT appear to be a full plane of symmetry based on these pairs.");
+    console.log(`     V0 reflects to V1: ${sym2_V0V1}, V4 reflects to V5: ${sym2_V4V5}. Plane 2 symmetry: ${sym2_V0V1 && sym2_V4V5}`);
+
+    console.log(`\n5. Dihedral Angles:`);
+    const faceNormals = J84_FACES_INDICES.map(faceVertexIds => {
+        const v0 = getCoord(faceVertexIds[0]);
+        const v1 = getCoord(faceVertexIds[1]);
+        const v2 = getCoord(faceVertexIds[2]);
+        const e1 = subtractVectors(v1, v0);
+        const e2 = subtractVectors(v2, v0);
+        let n = crossProduct(e1, e2);
+        const centroidFace = scaleVector(addVectors(addVectors(v0,v1),v2), 1/3);
+        const polyhedronCentroid = [0,0,0]; 
+        const vecPolyCentroidToFaceCentroid = subtractVectors(centroidFace, polyhedronCentroid);
+        if (dotProduct(n, vecPolyCentroidToFaceCentroid) < 0) {
+            n = scaleVector(n, -1);
+        }
+        return normalizeVector(n);
+    });
+
+    const dihedralAnglesData = []; // Store objects { edgeName: "V0-V2", angle: 123.45 }
+    const uniqueEdgesProcessed = new Set();
+
+    edges.forEach(edge => {
+        const v1Id = edge.v1.id;
+        const v2Id = edge.v2.id;
+        const edgeKey = Math.min(v1Id, v2Id) + "-" + Math.max(v1Id, v2Id);
+        if (uniqueEdgesProcessed.has(edgeKey)) return;
+        uniqueEdgesProcessed.add(edgeKey);
+
+        const incidentFaceIndices = [];
+        J84_FACES_INDICES.forEach((faceDef, index) => {
+            if (faceDef.includes(v1Id) && faceDef.includes(v2Id)) {
+                incidentFaceIndices.push(index);
+            }
+        });
+
+        if (incidentFaceIndices.length === 2) {
+            const n1 = faceNormals[incidentFaceIndices[0]];
+            const n2 = faceNormals[incidentFaceIndices[1]];
+            let dot = dotProduct(n1, n2);
+            dot = Math.max(-1, Math.min(1, dot)); 
+            const angleRad = Math.acos(dot); 
+            const dihedralRad = Math.PI - angleRad; 
+            dihedralAnglesData.push({
+                edgeName: `${edge.v1.name}-${edge.v2.name}`, // Use vertex names for the edge
+                angle: dihedralRad * 180 / Math.PI
+            });
+        }
+    });
+    
+    dihedralAnglesData.sort((a, b) => { // Optional: sort by edge name for consistent order
+        const nameA = a.edgeName.toUpperCase();
+        const nameB = b.edgeName.toUpperCase();
+        if (nameA < nameB) return -1;
+        if (nameA > nameB) return 1;
+        return 0;
+    });
+
+    console.log(`   All 18 calculated internal dihedral angles (degrees):`);
+    dihedralAnglesData.forEach(data => { // Iterate through the new array of objects
+        console.log(`     Edge ${data.edgeName}: ${data.angle.toFixed(2)}°`);
+    });
+
+    const allCalculatedAngles = dihedralAnglesData.map(data => data.angle);
+    allCalculatedAngles.sort((a, b) => a - b);
+
+    const uniqueAngles = [];
+    const angleTolerance = 0.01; 
+    if (allCalculatedAngles.length > 0) {
+        uniqueAngles.push(allCalculatedAngles[0]);
+        for (let i = 1; i < allCalculatedAngles.length; i++) {
+            if (Math.abs(allCalculatedAngles[i] - uniqueAngles[uniqueAngles.length - 1]) > angleTolerance) {
+                uniqueAngles.push(allCalculatedAngles[i]);
+            }
+        }
     }
+    console.log(`   Calculated unique internal dihedral angles: ${uniqueAngles.map(a => a.toFixed(2) + "°").join(', ')}`);
     console.log("-----------------------------------------");
 }
 
@@ -340,7 +389,7 @@ function performCalculationsAndSetupVisualization() {
     edges.forEach((edge, idx) => console.log(`${(idx+1).toString().padStart(2,' ')}: ${edge.v1.name}<->${edge.v2.name} (D:1.000000)`));
     console.log("-----------------------------------------");
     
-    verifyGeometricProperties(verticesObjects); 
+    verifyGeometricProperties(verticesObjects, edges); 
     
     computeFaceColors(); 
 
@@ -382,7 +431,6 @@ function setupThreeJSVisualization(centeredVertexPositions, centeredLabelData, o
     modelGroup = new THREE.Group(); 
     scene.add(modelGroup);
 
-    // --- Wireframe Mesh (for wireframe mode) ---
     const wireframePoints = [];
     originalEdges.forEach(edge => {
         wireframePoints.push(...centeredVertexPositions[edge.v1.id]);
@@ -394,7 +442,6 @@ function setupThreeJSVisualization(centeredVertexPositions, centeredLabelData, o
     wireframeMesh = new THREE.LineSegments(wireframeGeom, wireframeMaterial);
     modelGroup.add(wireframeMesh);
     
-    // --- Solid Mesh (Non-indexed for flat face colors) ---
     const solidGeometry = new THREE.BufferGeometry();
     const positionsArrayForSolid = [];
     const colorsArrayForSolid = [];
@@ -409,14 +456,14 @@ function setupThreeJSVisualization(centeredVertexPositions, centeredLabelData, o
 
     solidGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positionsArrayForSolid, 3));
     solidGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colorsArrayForSolid, 3));
-    solidGeometry.computeVertexNormals(); // This will compute face normals for non-indexed geometry
+    solidGeometry.computeVertexNormals(); 
     
     solidMaterial = new THREE.MeshPhongMaterial({ 
         shininess: 80, 
         specular: 0x222222,
         flatShading: true,
-        vertexColors: false, // Default to monochrome
-        color: 0x6082b6,      // Default monochrome color
+        vertexColors: false, 
+        color: 0x6082b6,
         polygonOffset: true,      
         polygonOffsetFactor: 1,   
         polygonOffsetUnits: 1     
@@ -425,8 +472,6 @@ function setupThreeJSVisualization(centeredVertexPositions, centeredLabelData, o
     solidMesh.visible = false; 
     modelGroup.add(solidMesh);
 
-    // --- Edge Overlay for Solid Mesh ---
-    // Recreate EdgesGeometry from the new non-indexed solidGeometry
     const edgesGeometry = new THREE.EdgesGeometry(solidMesh.geometry, 1); 
     const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1.5 });
     solidEdgesMesh = new THREE.LineSegments(edgesGeometry, edgeMaterial);
@@ -595,4 +640,3 @@ window.addEventListener('beforeunload', () => {
 </script>
 </body>
 </html>
-
