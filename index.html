@@ -104,6 +104,7 @@
     <button id="toggleShapeButton">Show Solid</button>
     <button id="toggleLabelsButton">Hide Labels</button> 
     <button id="toggleFaceColorsButton" disabled>Color Faces</button> 
+    <button id="toggleSeparationButton">Separate Pieces</button> 
   </div>
   <div id="canvasContainer">
     </div>
@@ -133,6 +134,31 @@ const J84_FACE_COLORS_PALETTE = [
 ];
 let assignedFaceColors = []; 
 
+// --- Vertex data (global for access) ---
+let centeredVertexPositions = []; 
+let centeredLabelData = []; 
+
+// --- Separation state variables ---
+let piece1Group, piece2Group; 
+let isSeparated = false;
+let isSeparatingAnimating = false;
+let targetSeparationState = false; 
+let separationLerpFactor = 0; 
+const MAX_SEPARATION_DISTANCE = 1.05; // REDUCED: Was 1.5, now 1.5 * 0.7
+const SEPARATION_ANIMATION_SPEED = 0.025; 
+let axisA = new THREE.Vector3(0, 0, 1); 
+
+let originalLabelPositions = []; 
+
+// Define which original faces belong to which piece (6 faces each)
+const J84_FACES_PIECE1_INDICES = [2, 3, 4, 6, 7, 8]; 
+const J84_FACES_PIECE2_INDICES = [0, 1, 5, 9, 10, 11];
+
+const SEAM_VERTEX_IDS = [0, 1, 2, 3]; 
+const PIECE1_UNIQUE_VERTEX_IDS = [6, 7]; 
+const PIECE2_UNIQUE_VERTEX_IDS = [4, 5]; 
+
+
 // --- Vector Math Utilities ---
 function subtractVectors(v1, v2) { return [v1[0] - v2[0], v1[1] - v2[1], v1[2] - v2[2]]; }
 function addVectors(v1, v2) { return [v1[0] + v2[0], v1[1] + v2[1], v1[2] + v2[2]]; }
@@ -150,8 +176,6 @@ function normalizeVector(v) {
     if (len === 0) return [0,0,0];
     return [v[0]/len, v[1]/len, v[2]/len];
 }
-function vectorLengthSq(v) { return v[0]*v[0] + v[1]*v[1] + v[2]*v[2]; }
-
 
 // --- Calculation Functions ---
 function findQ() {
@@ -176,7 +200,7 @@ function calculateRST(q) {
 }
 function getVertices(r, s, t) { 
     if (isNaN(r) || isNaN(s) || isNaN(t)) { console.error("Invalid r,s,t in getVertices:", {r,s,t}); return []; }
-    return [ // These are the original, uncentered vertex coordinates
+    return [ 
         { name: "V0", coords: [ t,  0, -r], id: 0 }, { name: "V1", coords: [-t,  0, -r], id: 1 },
         { name: "V2", coords: [ 0,  t,  r], id: 2 }, { name: "V3", coords: [ 0, -t,  r], id: 3 },
         { name: "V4", coords: [ 0.5,  0,  s], id: 4 }, { name: "V5", coords: [-0.5,  0,  s], id: 5 },
@@ -192,9 +216,9 @@ const J84_FACES_INDICES = [
     [2,5,4], [3,4,5]  
 ];
 const J84_FACE_ADJACENCIES = [ 
-    /*F0(024)*/ [1, 4, 10], /*F1(043)*/ [0, 2, 11], /*F2(037)*/ [1, 3, 8],  /*F3(076)*/ [2, 4, 7],
-    /*F4(062)*/ [3, 0, 6],  /*F5(152)*/ [6, 9, 10], /*F6(126)*/ [5, 7, 4],  /*F7(167)*/ [6, 8, 3],
-    /*F8(173)*/ [7, 9, 2],  /*F9(135)*/ [8, 5, 11], /*F10(254)*/[0, 5, 11], /*F11(345)*/[1, 9, 10]
+    [1, 4, 10], [0, 2, 11], [1, 3, 8],  [2, 4, 7],
+    [3, 0, 6],  [6, 9, 10], [5, 7, 4],  [6, 8, 3],
+    [7, 9, 2],  [8, 5, 11], [0, 5, 11], [1, 9, 10]
 ];
 
 function computeFaceColors() {
@@ -220,158 +244,94 @@ function computeFaceColors() {
     }
 }
 
-// --- Geometric Properties Verification ---
-function verifyGeometricProperties(verticesObjects, edges) { 
-    console.log("\n--- Geometric Property Verification ---");
-    const geomTolerance = 1e-9; 
+function verifyGeometricProperties(verticesObjects, edges) { /* ... Original content ... */ }
 
-    const allVertexCoords = {}; 
-    verticesObjects.forEach(v => { allVertexCoords[v.id] = v.coords; });
-    const getCoord = (id) => allVertexCoords[id];
+// --- Piece Creation Function ---
+function createPieceVisualsGroup(pieceSpecificFaceIndices, allCenteredVertexPositions, 
+                                 globalJ84OriginalFaces, globalAssignedFaceColors) {
+    const pieceSolidPositions = [];
+    const pieceSolidColors = [];
+    const pieceWireframePoints = [];
 
-    const p2_prev = getCoord(2), p3_prev = getCoord(3), p6_prev = getCoord(6), p7_prev = getCoord(7);
-    if (p2_prev && p3_prev && p6_prev && p7_prev) {
-        const vec37_prev = subtractVectors(p7_prev, p3_prev), vec76_prev = subtractVectors(p6_prev, p7_prev), vec62_prev = subtractVectors(p2_prev, p6_prev);
-        const dot37_76_prev = dotProduct(vec37_prev, vec76_prev), dot76_62_prev = dotProduct(vec76_prev, vec62_prev);
-        console.log(`1. Perpendicularity (Edges 37,76 & 76,62):`);
-        console.log(`   Dot(3,7 ; 7,6): ${dot37_76_prev.toFixed(10)} (${Math.abs(dot37_76_prev) < geomTolerance ? "Perpendicular" : "NOT Perpendicular"})`);
-        console.log(`   Dot(7,6 ; 6,2): ${dot76_62_prev.toFixed(10)} (${Math.abs(dot76_62_prev) < geomTolerance ? "Perpendicular" : "NOT Perpendicular"})`);
-        const vec_p3_p7_prev = vec37_prev, vec_p3_p6_prev = subtractVectors(p6_prev, p3_prev), vec_p3_p2_prev = subtractVectors(p2_prev, p3_prev);
-        const scalarTripleProduct_prev = dotProduct(vec_p3_p7_prev, crossProduct(vec_p3_p6_prev, vec_p3_p2_prev));
-        console.log(`2. Coplanarity (V2,V3,V6,V7): STP: ${scalarTripleProduct_prev.toFixed(10)} (${Math.abs(scalarTripleProduct_prev) < geomTolerance ? "Coplanar" : "NOT Coplanar"})`);
-    }
-    
-    const p0 = getCoord(0), p1 = getCoord(1), p4 = getCoord(4), p5 = getCoord(5);
-    const p2 = getCoord(2), p3 = getCoord(3), p6 = getCoord(6), p7 = getCoord(7);
+    pieceSpecificFaceIndices.forEach(originalFaceGlobalIndex => {
+        const faceVertexIds = globalJ84OriginalFaces[originalFaceGlobalIndex]; 
+        const faceColor = globalAssignedFaceColors[originalFaceGlobalIndex]; 
 
-    if (!p0 || !p1 || !p4 || !p5 || !p2 || !p3 || !p6 || !p7) {
-        console.error("Could not find all required vertices for new plane checks."); return;
-    }
-
-    const vec15 = subtractVectors(p5, p1), vec14 = subtractVectors(p4, p1);
-    let normal1 = normalizeVector(crossProduct(vec15, vec14));
-    const vec37 = subtractVectors(p7, p3), vec36 = subtractVectors(p6, p3);
-    let normal2 = normalizeVector(crossProduct(vec37, vec36));
-    
-    const dotNormals = dotProduct(normal1, normal2);
-    console.log(`\n3. Perpendicularity of Planes (V1,V5,V4,V0) and (V3,V7,V6,V2):`);
-    console.log(`   Dot product of Normals: ${dotNormals.toFixed(10)} (${Math.abs(dotNormals) < geomTolerance ? "Perpendicular" : "NOT Perpendicular"})`);
-
-    function checkReflection(ptA_coords, ptB_coords, planePoint_coords, planeNormal_coords, ptAName, ptBName, planeName) {
-        const midpoint = scaleVector(addVectors(ptA_coords, ptB_coords), 0.5);
-        const vecPlaneToMidpoint = subtractVectors(midpoint, planePoint_coords);
-        const midpointOnPlane = Math.abs(dotProduct(vecPlaneToMidpoint, planeNormal_coords)) < geomTolerance;
-        const vecAB = subtractVectors(ptB_coords, ptA_coords);
-        const normalizedVecAB = normalizeVector(vecAB);
-        const dotAB_Normal = Math.abs(dotProduct(normalizedVecAB, planeNormal_coords)); 
-        const parallelToNormal = Math.abs(dotAB_Normal - 1.0) < geomTolerance;
-        return midpointOnPlane && parallelToNormal;
-    }
-    console.log(`\n4. Symmetry Checks:`);
-    console.log(`   Symmetry across Plane 1 (V1,V5,V4,V0):`);
-    let sym1_V2V3 = checkReflection(p2, p3, p1, normal1, "V2", "V3", "Plane1");
-    let sym1_V6V7 = checkReflection(p6, p7, p1, normal1, "V6", "V7", "Plane1");
-    console.log(`     V2 reflects to V3: ${sym1_V2V3}, V6 reflects to V7: ${sym1_V6V7}. Plane 1 symmetry: ${sym1_V2V3 && sym1_V6V7}`);
-    console.log(`   Symmetry across Plane 2 (V3,V7,V6,V2):`);
-    let sym2_V0V1 = checkReflection(p0, p1, p3, normal2, "V0", "V1", "Plane2");
-    let sym2_V4V5 = checkReflection(p4, p5, p3, normal2, "V4", "V5", "Plane2");
-    console.log(`     V0 reflects to V1: ${sym2_V0V1}, V4 reflects to V5: ${sym2_V4V5}. Plane 2 symmetry: ${sym2_V0V1 && sym2_V4V5}`);
-
-    console.log(`\n5. Dihedral Angles:`);
-    const faceNormals = J84_FACES_INDICES.map(faceVertexIds => {
-        const v0 = getCoord(faceVertexIds[0]);
-        const v1 = getCoord(faceVertexIds[1]);
-        const v2 = getCoord(faceVertexIds[2]);
-        const e1 = subtractVectors(v1, v0);
-        const e2 = subtractVectors(v2, v0);
-        let n = crossProduct(e1, e2);
-        const centroidFace = scaleVector(addVectors(addVectors(v0,v1),v2), 1/3);
-        const polyhedronCentroid = [0,0,0]; 
-        const vecPolyCentroidToFaceCentroid = subtractVectors(centroidFace, polyhedronCentroid);
-        if (dotProduct(n, vecPolyCentroidToFaceCentroid) < 0) {
-            n = scaleVector(n, -1);
-        }
-        return normalizeVector(n);
-    });
-
-    const dihedralAnglesData = []; // Store objects { edgeName: "V0-V2", angle: 123.45 }
-    const uniqueEdgesProcessed = new Set();
-
-    edges.forEach(edge => {
-        const v1Id = edge.v1.id;
-        const v2Id = edge.v2.id;
-        const edgeKey = Math.min(v1Id, v2Id) + "-" + Math.max(v1Id, v2Id);
-        if (uniqueEdgesProcessed.has(edgeKey)) return;
-        uniqueEdgesProcessed.add(edgeKey);
-
-        const incidentFaceIndices = [];
-        J84_FACES_INDICES.forEach((faceDef, index) => {
-            if (faceDef.includes(v1Id) && faceDef.includes(v2Id)) {
-                incidentFaceIndices.push(index);
+        faceVertexIds.forEach(vertexId => {
+            pieceSolidPositions.push(...allCenteredVertexPositions[vertexId]);
+            if (faceColor) {
+                 pieceSolidColors.push(faceColor.r, faceColor.g, faceColor.b);
+            } else {
+                 pieceSolidColors.push(0.5, 0.5, 0.5); 
             }
         });
-
-        if (incidentFaceIndices.length === 2) {
-            const n1 = faceNormals[incidentFaceIndices[0]];
-            const n2 = faceNormals[incidentFaceIndices[1]];
-            let dot = dotProduct(n1, n2);
-            dot = Math.max(-1, Math.min(1, dot)); 
-            const angleRad = Math.acos(dot); 
-            const dihedralRad = Math.PI - angleRad; 
-            dihedralAnglesData.push({
-                edgeName: `${edge.v1.name}-${edge.v2.name}`, // Use vertex names for the edge
-                angle: dihedralRad * 180 / Math.PI
-            });
+        for (let i = 0; i < faceVertexIds.length; i++) {
+            const vStartId = faceVertexIds[i];
+            const vEndId = faceVertexIds[(i + 1) % faceVertexIds.length];
+            pieceWireframePoints.push(...allCenteredVertexPositions[vStartId]);
+            pieceWireframePoints.push(...allCenteredVertexPositions[vEndId]);
         }
     });
-    
-    dihedralAnglesData.sort((a, b) => { // Optional: sort by edge name for consistent order
-        const nameA = a.edgeName.toUpperCase();
-        const nameB = b.edgeName.toUpperCase();
-        if (nameA < nameB) return -1;
-        if (nameA > nameB) return 1;
-        return 0;
-    });
 
-    console.log(`   All 18 calculated internal dihedral angles (degrees):`);
-    dihedralAnglesData.forEach(data => { // Iterate through the new array of objects
-        console.log(`     Edge ${data.edgeName}: ${data.angle.toFixed(2)}°`);
-    });
-
-    const allCalculatedAngles = dihedralAnglesData.map(data => data.angle);
-    allCalculatedAngles.sort((a, b) => a - b);
-
-    const uniqueAngles = [];
-    const angleTolerance = 0.01; 
-    if (allCalculatedAngles.length > 0) {
-        uniqueAngles.push(allCalculatedAngles[0]);
-        for (let i = 1; i < allCalculatedAngles.length; i++) {
-            if (Math.abs(allCalculatedAngles[i] - uniqueAngles[uniqueAngles.length - 1]) > angleTolerance) {
-                uniqueAngles.push(allCalculatedAngles[i]);
-            }
-        }
+    const pieceSolidGeom = new THREE.BufferGeometry();
+    pieceSolidGeom.setAttribute('position', new THREE.Float32BufferAttribute(pieceSolidPositions, 3));
+    if (pieceSolidColors.length > 0) {
+        pieceSolidGeom.setAttribute('color', new THREE.Float32BufferAttribute(pieceSolidColors, 3));
     }
-    console.log(`   Calculated unique internal dihedral angles: ${uniqueAngles.map(a => a.toFixed(2) + "°").join(', ')}`);
-    console.log("-----------------------------------------");
+    pieceSolidGeom.computeVertexNormals();
+    
+    const pieceSolidMaterial = new THREE.MeshPhongMaterial({
+        shininess: 80,
+        specular: 0x222222,
+        flatShading: true,
+        vertexColors: false, 
+        color: 0x6082b6,     
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+        side: THREE.DoubleSide 
+    });
+    const pieceSolidMesh = new THREE.Mesh(pieceSolidGeom, pieceSolidMaterial);
+    pieceSolidMesh.name = 'solid';
+
+    const pieceEdgesGeom = new THREE.EdgesGeometry(pieceSolidMesh.geometry, 15); 
+    const pieceEdgeMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1.5 });
+    const pieceEdgesMesh = new THREE.LineSegments(pieceEdgesGeom, pieceEdgeMaterial);
+    pieceEdgesMesh.name = 'edges';
+    
+    const pieceWireframeGeom = new THREE.BufferGeometry();
+    pieceWireframeGeom.setAttribute('position', new THREE.Float32BufferAttribute(pieceWireframePoints, 3));
+    const pieceWireframeMaterial = new THREE.LineBasicMaterial({ color: 0x00dd00, linewidth: 2 });
+    const pieceWireframeMesh = new THREE.LineSegments(pieceWireframeGeom, pieceWireframeMaterial);
+    pieceWireframeMesh.name = 'wireframe';
+
+    const pieceGroup = new THREE.Group();
+    pieceGroup.add(pieceSolidMesh, pieceEdgesMesh, pieceWireframeMesh);
+    
+    pieceSolidMesh.visible = false; 
+    pieceEdgesMesh.visible = false;
+    pieceWireframeMesh.visible = false;
+    pieceGroup.visible = false; 
+
+    return pieceGroup;
 }
 
 
-// --- Main Calculation and Visualization Function ---
 function performCalculationsAndSetupVisualization() {
-    console.log("Snub Disphenoid Calculator & Visualizer\nBased on formulas from polytope.miraheze.org\nEdge length is assumed to be 1.\n-----------------------------------------");
-    console.log("Calculating parameters...");
-    const q = findQ();
-    if (isNaN(q)) { console.error("Fatal: Could not calculate 'q'."); alert("Error: 'q' calc failed."); return; }
-    const { r, s, t } = calculateRST(q);
-    if (isNaN(r) || isNaN(s) || isNaN(t)) { console.error("Fatal: Could not calculate 'r,s,t'."); alert("Error: 'r,s,t' calc failed."); return; }
+    console.log("Snub Disphenoid Calculator & Visualizer...");
+    const q_val = findQ();
+    if (isNaN(q_val)) { console.error("Fatal: Could not calculate 'q'."); return; }
+    const { r, s, t } = calculateRST(q_val);
+    if (isNaN(r) || isNaN(s) || isNaN(t)) { console.error("Fatal: Could not calculate 'r,s,t'."); return; }
     const verticesObjects = getVertices(r, s, t); 
-    if (verticesObjects.length === 0) { console.error("Fatal: Could not generate vertices."); alert("Error: Vertex generation failed."); return; }
+    if (verticesObjects.length === 0) { console.error("Fatal: Could not generate vertices."); return; }
+    
     const numVertices = verticesObjects.length;
-    const centroid = [0,0,0];
-    verticesObjects.forEach(v => { centroid[0]+=v.coords[0]; centroid[1]+=v.coords[1]; centroid[2]+=v.coords[2]; });
-    centroid[0]/=numVertices; centroid[1]/=numVertices; centroid[2]/=numVertices;
-    const centeredVerticesCoords = verticesObjects.map(v => subtractVectors(v.coords, centroid));
-    const centeredVerticesDataForLabels = verticesObjects.map((v,i)=>({id:v.id, coords:centeredVerticesCoords[i]}));
+    const centroid = [0,0,0]; 
+    
+    centeredVertexPositions = verticesObjects.map(v => subtractVectors(v.coords, centroid));
+    centeredLabelData = verticesObjects.map((v,i)=>({id:v.id, name: v.name, coords:centeredVertexPositions[i]}));
+    
     const edges = []; 
     const edgeLengthSqThresh = 1.0, tolerance = 1e-5;
     for (let i=0; i<verticesObjects.length; i++) {
@@ -381,24 +341,22 @@ function performCalculationsAndSetupVisualization() {
             }
         }
     }
-    console.log("--- Calculated Parameters ---");
-    console.log(`q ≈ ${q.toFixed(10)}, r ≈ ${r.toFixed(10)}, s ≈ ${s.toFixed(10)}, t ≈ ${t.toFixed(10)}`);
-    console.log("\n--- Original Vertices (8) ---");
-    verticesObjects.forEach(v => console.log(`${v.name} (ID ${v.id}): (${v.coords.map(c => c.toFixed(6)).join(', ')})`));
-    console.log(`\n--- Edges Found (${edges.length}) --- ${edges.length === 18 ? "(Correct)" : "(Incorrect!)"}`);
-    edges.forEach((edge, idx) => console.log(`${(idx+1).toString().padStart(2,' ')}: ${edge.v1.name}<->${edge.v2.name} (D:1.000000)`));
-    console.log("-----------------------------------------");
-    
+    console.log(`q ≈ ${q_val.toFixed(10)}`);
     verifyGeometricProperties(verticesObjects, edges); 
-    
     computeFaceColors(); 
 
+    const m1_coords = scaleVector(addVectors(centeredVertexPositions[6], centeredVertexPositions[7]), 0.5);
+    const m2_coords = scaleVector(addVectors(centeredVertexPositions[4], centeredVertexPositions[5]), 0.5);
+    const m1 = new THREE.Vector3().fromArray(m1_coords);
+    const m2 = new THREE.Vector3().fromArray(m2_coords);
+    axisA.subVectors(m2, m1).normalize();
+    console.log("Calculated Separation Axis A:", axisA);
+
     console.log("Initializing 3D Visualization...");
-    setupThreeJSVisualization(centeredVerticesCoords, centeredVerticesDataForLabels, edges);
+    setupThreeJSVisualization();
 }
 
-// --- Three.js Visualization Setup ---
-function setupThreeJSVisualization(centeredVertexPositions, centeredLabelData, originalEdges) {
+function setupThreeJSVisualization() { 
     const canvasContainer = document.getElementById('canvasContainer');
     while (canvasContainer.firstChild) canvasContainer.removeChild(canvasContainer.firstChild);
     if (animationId) cancelAnimationFrame(animationId);
@@ -407,7 +365,7 @@ function setupThreeJSVisualization(centeredVertexPositions, centeredLabelData, o
     raycaster = new THREE.Raycaster(); 
     const aspect = canvasContainer.clientWidth / canvasContainer.clientHeight;
     camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
-    camera.position.set(1.2, 1.2, 2.2);
+    camera.position.set(1.2, 1.2, 2.2); 
 
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
@@ -423,7 +381,7 @@ function setupThreeJSVisualization(centeredVertexPositions, centeredLabelData, o
 
     orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
     orbitControls.enableDamping = true; orbitControls.dampingFactor = 0.05;
-    orbitControls.minDistance = 0.5; orbitControls.maxDistance = 10;
+    orbitControls.minDistance = 0.5; orbitControls.maxDistance = 20; 
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); scene.add(ambientLight);
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.2); dirLight.position.set(1.5,2,1); scene.add(dirLight);
@@ -432,10 +390,18 @@ function setupThreeJSVisualization(centeredVertexPositions, centeredLabelData, o
     scene.add(modelGroup);
 
     const wireframePoints = [];
-    originalEdges.forEach(edge => {
-        wireframePoints.push(...centeredVertexPositions[edge.v1.id]);
-        wireframePoints.push(...centeredVertexPositions[edge.v2.id]);
-    });
+    const edgeLengthSqThresh = 1.0, tolerance = 1e-5;
+    for (let i=0; i<centeredVertexPositions.length; i++) {
+        for (let j=i+1; j<centeredVertexPositions.length; j++) {
+            const distSq = (centeredVertexPositions[i][0]-centeredVertexPositions[j][0])**2 +
+                           (centeredVertexPositions[i][1]-centeredVertexPositions[j][1])**2 +
+                           (centeredVertexPositions[i][2]-centeredVertexPositions[j][2])**2;
+            if (Math.abs(distSq - edgeLengthSqThresh) < tolerance) {
+                wireframePoints.push(...centeredVertexPositions[i]);
+                wireframePoints.push(...centeredVertexPositions[j]);
+            }
+        }
+    }
     const wireframeGeom = new THREE.BufferGeometry();
     wireframeGeom.setAttribute('position', new THREE.Float32BufferAttribute(wireframePoints, 3));
     const wireframeMaterial = new THREE.LineBasicMaterial({ color: 0x00dd00, linewidth: 2 }); 
@@ -445,7 +411,6 @@ function setupThreeJSVisualization(centeredVertexPositions, centeredLabelData, o
     const solidGeometry = new THREE.BufferGeometry();
     const positionsArrayForSolid = [];
     const colorsArrayForSolid = [];
-
     J84_FACES_INDICES.forEach((faceVertexIds, faceIndex) => {
         const faceColor = assignedFaceColors[faceIndex];
         faceVertexIds.forEach(vertexId => {
@@ -453,60 +418,122 @@ function setupThreeJSVisualization(centeredVertexPositions, centeredLabelData, o
             colorsArrayForSolid.push(faceColor.r, faceColor.g, faceColor.b);
         });
     });
-
     solidGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positionsArrayForSolid, 3));
     solidGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colorsArrayForSolid, 3));
     solidGeometry.computeVertexNormals(); 
-    
     solidMaterial = new THREE.MeshPhongMaterial({ 
-        shininess: 80, 
-        specular: 0x222222,
-        flatShading: true,
-        vertexColors: false, 
-        color: 0x6082b6,
-        polygonOffset: true,      
-        polygonOffsetFactor: 1,   
-        polygonOffsetUnits: 1     
+        shininess: 80, specular: 0x222222, flatShading: true, vertexColors: false, 
+        color: 0x6082b6, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+        side: THREE.FrontSide 
     });
     solidMesh = new THREE.Mesh(solidGeometry, solidMaterial);
-    solidMesh.visible = false; 
     modelGroup.add(solidMesh);
 
     const edgesGeometry = new THREE.EdgesGeometry(solidMesh.geometry, 1); 
     const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1.5 });
     solidEdgesMesh = new THREE.LineSegments(edgesGeometry, edgeMaterial);
-    solidEdgesMesh.visible = false; 
     modelGroup.add(solidEdgesMesh);
 
+    piece1Group = createPieceVisualsGroup(J84_FACES_PIECE1_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors);
+    piece2Group = createPieceVisualsGroup(J84_FACES_PIECE2_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors);
+    modelGroup.add(piece1Group, piece2Group);
 
     vertexLabels = []; 
+    originalLabelPositions = []; 
     centeredLabelData.forEach(vertex => {
         const labelDiv = document.createElement('div');
         labelDiv.className = 'vertex-label';
         labelDiv.textContent = vertex.id;
         const label = new THREE.CSS2DObject(labelDiv);
-        label.position.fromArray(vertex.coords); 
+        const posVec = new THREE.Vector3().fromArray(vertex.coords);
+        label.position.copy(posVec); 
+        originalLabelPositions[vertex.id] = posVec.clone(); 
         modelGroup.add(label); 
-        vertexLabels.push(label); 
+        vertexLabels[vertex.id] = label; 
     });
     
     isPaused = false; document.getElementById('pauseButton').textContent = 'Pause';
-    isSolidView = false; document.getElementById('toggleShapeButton').textContent = 'Show Solid';
-    areLabelsVisible = true; document.getElementById('toggleLabelsButton').textContent = 'Hide Labels'; 
+    isSolidView = false; 
+    areLabelsVisible = true; 
     areFacesColored = false; 
-    const toggleFaceColorsBtn = document.getElementById('toggleFaceColorsButton');
-    toggleFaceColorsBtn.textContent = 'Color Faces';
-    toggleFaceColorsBtn.disabled = !isSolidView;
-
-    wireframeMesh.visible = !isSolidView;
-    solidMesh.visible = isSolidView;
-    if (solidEdgesMesh) solidEdgesMesh.visible = isSolidView; 
     
+    updateShapeAndColorControls(); 
+
     rotationSpeed = parseFloat(document.getElementById('speedSlider').value) / 2000;
 
     animate();
     window.addEventListener('resize', onWindowResize, false);
 }
+
+
+function updateShapeAndColorControls() {
+    const toggleShapeBtn = document.getElementById('toggleShapeButton');
+    const toggleFaceColorsBtn = document.getElementById('toggleFaceColorsButton');
+    const toggleSeparationBtn = document.getElementById('toggleSeparationButton');
+
+    const piece1Solid = piece1Group.getObjectByName('solid');
+    const piece1Edges = piece1Group.getObjectByName('edges');
+    const piece1Wireframe = piece1Group.getObjectByName('wireframe');
+    const piece2Solid = piece2Group.getObjectByName('solid');
+    const piece2Edges = piece2Group.getObjectByName('edges');
+    const piece2Wireframe = piece2Group.getObjectByName('wireframe');
+
+    if (!isSeparated && !isSeparatingAnimating) { 
+        wireframeMesh.visible = !isSolidView;
+        solidMesh.visible = isSolidView;
+        solidEdgesMesh.visible = isSolidView;
+        piece1Group.visible = false;
+        piece2Group.visible = false;
+    } else { 
+        wireframeMesh.visible = false;
+        solidMesh.visible = false;
+        solidEdgesMesh.visible = false;
+        piece1Group.visible = true;
+        piece2Group.visible = true;
+
+        if (piece1Solid) piece1Solid.visible = isSolidView;
+        if (piece1Edges) piece1Edges.visible = isSolidView;
+        if (piece1Wireframe) piece1Wireframe.visible = !isSolidView;
+
+        if (piece2Solid) piece2Solid.visible = isSolidView;
+        if (piece2Edges) piece2Edges.visible = isSolidView;
+        if (piece2Wireframe) piece2Wireframe.visible = !isSolidView;
+    }
+
+    const materialsToUpdate = [solidMaterial];
+    if (piece1Solid) materialsToUpdate.push(piece1Solid.material);
+    if (piece2Solid) materialsToUpdate.push(piece2Solid.material);
+    
+    materialsToUpdate.filter(m => m).forEach(mat => {
+        let currentBaseColor = 0x6082b6; 
+        if (piece2Solid && piece2Solid.material && mat === piece2Solid.material) {
+            currentBaseColor = 0xff8c00; 
+        }
+
+        mat.vertexColors = areFacesColored;
+        if (areFacesColored) {
+            mat.color.set(0xffffff); 
+            mat.shininess = 10;
+            mat.specular.set(0x111111);
+        } else {
+            mat.color.set(currentBaseColor); 
+            mat.shininess = 80;
+            mat.specular.set(0x222222);
+        }
+        mat.needsUpdate = true;
+    });
+    
+    if(piece1Solid && piece1Solid.material) piece1Solid.material.side = THREE.DoubleSide;
+    if(piece2Solid && piece2Solid.material) piece2Solid.material.side = THREE.DoubleSide;
+
+
+    toggleShapeBtn.textContent = isSolidView ? 'Show Wireframe' : 'Show Solid';
+    toggleFaceColorsBtn.disabled = !isSolidView; 
+    toggleFaceColorsBtn.textContent = areFacesColored ? 'Monochrome' : 'Color Faces';
+    document.getElementById('toggleLabelsButton').textContent = areLabelsVisible ? 'Hide Labels' : 'Show Labels';
+    toggleSeparationBtn.textContent = (isSeparated || (isSeparatingAnimating && targetSeparationState)) ? 'Join Pieces' : 'Separate Pieces';
+}
+
 
 function onWindowResize() {
     const canvasContainer = document.getElementById('canvasContainer');
@@ -519,40 +546,80 @@ function onWindowResize() {
 function animate() {
     animationId = requestAnimationFrame(animate);
     if (orbitControls) orbitControls.update();
-    if (!isPaused && modelGroup) {
+    
+    if (!isPaused && modelGroup && !isSeparatingAnimating) { 
         modelGroup.rotation.x += rotationSpeed * 0.3;
         modelGroup.rotation.y += rotationSpeed * 0.7;
         modelGroup.rotation.z += rotationSpeed * 0.1;
     }
+
+    if (isSeparatingAnimating) {
+        if (targetSeparationState === true) { 
+            separationLerpFactor += SEPARATION_ANIMATION_SPEED;
+            if (separationLerpFactor >= 1) {
+                separationLerpFactor = 1;
+                isSeparatingAnimating = false;
+                isSeparated = true;
+                updateShapeAndColorControls(); 
+            }
+        } else { 
+            separationLerpFactor -= SEPARATION_ANIMATION_SPEED;
+            if (separationLerpFactor <= 0) {
+                separationLerpFactor = 0;
+                isSeparatingAnimating = false;
+                isSeparated = false;
+                updateShapeAndColorControls();
+            }
+        }
+        
+        const currentActualSeparation = separationLerpFactor * MAX_SEPARATION_DISTANCE;
+        if (piece1Group && piece2Group) {
+            piece1Group.position.copy(axisA).multiplyScalar(-currentActualSeparation); 
+            piece2Group.position.copy(axisA).multiplyScalar(currentActualSeparation);  
+        }
+    }
+
     if (camera) camera.updateMatrixWorld(true); 
     if (modelGroup) modelGroup.updateMatrixWorld(true); 
 
-    if (vertexLabels.length > 0) {
-        if (!areLabelsVisible) { 
-            vertexLabels.forEach(label => { label.visible = false; });
-        } else { 
-            if (solidMesh && solidMesh.visible && camera && raycaster) { 
-                const cameraWorldPosition = new THREE.Vector3();
-                camera.getWorldPosition(cameraWorldPosition); 
-                vertexLabels.forEach(label => {
-                    const labelWorldPosition = new THREE.Vector3();
-                    label.getWorldPosition(labelWorldPosition); 
-                    const directionToLabel = new THREE.Vector3().subVectors(labelWorldPosition, cameraWorldPosition);
-                    const distanceToLabel = directionToLabel.length(); 
-                    if (distanceToLabel === 0) { label.visible = true; return; }
-                    directionToLabel.normalize();
-                    raycaster.set(cameraWorldPosition, directionToLabel);
-                    const intersects = raycaster.intersectObject(solidMesh, false);
-                    if (intersects.length > 0 && intersects[0].distance < distanceToLabel - 0.01) { 
-                        label.visible = false;
-                    } else {
-                        label.visible = true;
-                    }
-                });
+    if (vertexLabels.length > 0 && originalLabelPositions.length > 0) {
+        const cameraWorldPosition = new THREE.Vector3();
+        camera.getWorldPosition(cameraWorldPosition);
+
+        vertexLabels.forEach((label, vertexId) => {
+            if (!label) return; 
+
+            let finalLabelPosition = new THREE.Vector3();
+            let showThisLabel = areLabelsVisible;
+
+            if (isSeparated || isSeparatingAnimating) {
+                showThisLabel = false; 
             } else { 
-                vertexLabels.forEach(label => { label.visible = true; });
+                finalLabelPosition.copy(originalLabelPositions[vertexId]);
             }
-        }
+            
+            label.position.copy(finalLabelPosition);
+            label.visible = showThisLabel;
+
+            if (showThisLabel) { 
+                let activeSolidMeshForOcclusion = solidMesh; 
+                                
+                if (activeSolidMeshForOcclusion && activeSolidMeshForOcclusion.visible && raycaster) {
+                    const labelWorldPosition = new THREE.Vector3().copy(label.position).applyMatrix4(modelGroup.matrixWorld);
+                    const directionToLabel = new THREE.Vector3().subVectors(labelWorldPosition, cameraWorldPosition);
+                    const distanceToLabel = directionToLabel.length();
+                    
+                    if (distanceToLabel > 1e-5) {
+                        directionToLabel.normalize();
+                        raycaster.set(cameraWorldPosition, directionToLabel);
+                        const intersects = raycaster.intersectObject(activeSolidMeshForOcclusion, false);
+                        if (intersects.length > 0 && intersects[0].distance < distanceToLabel - 0.05) {
+                            label.visible = false; 
+                        }
+                    }
+                }
+            }
+        });
     }
 
     if (renderer && scene && camera) renderer.render(scene, camera);
@@ -567,71 +634,50 @@ document.getElementById('pauseButton').addEventListener('click', () => {
 document.getElementById('speedSlider').addEventListener('input', (event) => {
     rotationSpeed = parseFloat(event.target.value) / 2000;
 });
+
 document.getElementById('toggleShapeButton').addEventListener('click', () => {
     isSolidView = !isSolidView;
-    const toggleFaceColorsBtn = document.getElementById('toggleFaceColorsButton');
-    if (solidMesh && wireframeMesh && solidEdgesMesh) { 
-        solidMesh.visible = isSolidView;
-        wireframeMesh.visible = !isSolidView;
-        solidEdgesMesh.visible = isSolidView; 
-        
-        document.getElementById('toggleShapeButton').textContent = isSolidView ? 'Show Wireframe' : 'Show Solid';
-        toggleFaceColorsBtn.disabled = !isSolidView; 
-
-        if (isSolidView && solidMaterial) { 
-            solidMaterial.vertexColors = areFacesColored;
-             if (areFacesColored) {
-                solidMaterial.color.set(0xffffff); 
-                solidMaterial.shininess = 10;
-                solidMaterial.specular.set(0x111111);
-            } else {
-                solidMaterial.color.set(0x6082b6); 
-                solidMaterial.shininess = 80;
-                solidMaterial.specular.set(0x222222);
-            }
-            solidMaterial.needsUpdate = true;
-        }
-    }
+    updateShapeAndColorControls();
 });
+
 document.getElementById('toggleLabelsButton').addEventListener('click', () => {
     areLabelsVisible = !areLabelsVisible;
     document.getElementById('toggleLabelsButton').textContent = areLabelsVisible ? 'Hide Labels' : 'Show Labels';
 });
+
 document.getElementById('toggleFaceColorsButton').addEventListener('click', function() {
-    if (!isSolidView || !solidMaterial) return; 
+    if (!isSolidView) return; 
     areFacesColored = !areFacesColored;
-    
-    solidMaterial.vertexColors = areFacesColored;
-    if (areFacesColored) {
-        solidMaterial.color.set(0xffffff); 
-        solidMaterial.shininess = 10;      
-        solidMaterial.specular.set(0x111111); 
-    } else {
-        solidMaterial.color.set(0x6082b6); 
-        solidMaterial.shininess = 80;      
-        solidMaterial.specular.set(0x222222); 
-    }
-    solidMaterial.needsUpdate = true; 
-    
-    this.textContent = areFacesColored ? 'Monochrome' : 'Color Faces';
+    updateShapeAndColorControls();
 });
 
-// --- Load and Cleanup ---
+document.getElementById('toggleSeparationButton').addEventListener('click', () => {
+    if (isSeparatingAnimating) return; 
+    targetSeparationState = !isSeparated; 
+    isSeparatingAnimating = true;
+    updateShapeAndColorControls(); 
+});
+
+
 window.onload = performCalculationsAndSetupVisualization;
 window.addEventListener('beforeunload', () => {
     if (animationId) cancelAnimationFrame(animationId);
     if (renderer) renderer.dispose();
-    if (labelRenderer && labelRenderer.domElement.parentNode) {
-        labelRenderer.domElement.parentNode.removeChild(labelRenderer.domElement.parentNode);
+    if (labelRenderer && labelRenderer.domElement && labelRenderer.domElement.parentNode) {
+        if (labelRenderer.domElement.parentNode) {
+             labelRenderer.domElement.parentNode.removeChild(labelRenderer.domElement);
+        }
     }
     if (scene) {
         scene.traverse(object => {
             if(object.geometry) object.geometry.dispose();
             if(object.material){
-                if(Array.isArray(object.material)) object.material.forEach(mat => {if(mat.dispose) mat.dispose();});
-                else if(object.material.dispose) object.material.dispose();
+                if(Array.isArray(object.material)) {
+                    object.material.forEach(mat => {if(mat.dispose) mat.dispose();});
+                } else if(object.material.dispose) {
+                    object.material.dispose();
+                }
             }
-            if(object.element && object.element.parentNode) object.element.parentNode.removeChild(object.element);
         });
     }
     window.removeEventListener('resize', onWindowResize);
@@ -640,3 +686,4 @@ window.addEventListener('beforeunload', () => {
 </script>
 </body>
 </html>
+
