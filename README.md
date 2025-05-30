@@ -34,12 +34,18 @@ All detailed calculations, vertex coordinates, edge lists, and geometric propert
     * **Vertex Labels:**
         * Numerical labels (0-7) displayed at each vertex.
         * **Toggle Button:** "Hide Labels" / "Show Labels".
-        * **Occlusion:** In solid view, labels hidden behind the model are automatically occluded (not drawn).
+        * **Occlusion:** In solid view, labels hidden behind the model are automatically occluded (not drawn). Labels are hidden when pieces are separated.
     * **Face Coloring (Solid Mode Only):**
         * **Toggle Button:** "Color Faces" / "Monochrome" (enabled only in solid view).
-        * **Multi-Color Mode:** Assigns distinct colors to the 12 faces using a greedy algorithm to minimize adjacent faces having the same color. Material properties are adjusted for a flatter, matte appearance of colored faces.
-        * **Monochrome Mode:** Displays the solid with a default single color (e.g., blue-gray).
+        * **Multi-Color Mode:** Assigns distinct colors to the 12 faces (or the faces of separated pieces) using a greedy algorithm to minimize adjacent faces having the same color. Material properties are adjusted for a flatter, matte appearance of colored faces.
+        * **Monochrome Mode:** Displays the solid with a default single color (e.g., blue-gray). When pieces are separated in this mode, one piece is rendered in a distinct color (e.g., orange) for better visual differentiation.
     * **Sharp Edge Delineation:** In solid view, edges are rendered with a contrasting line overlay for clear face separation.
+    * **Piece Separation:**
+        * **Toggle Button:** "Separate Pieces" / "Join Pieces".
+        * Animates the separation of the snub disphenoid into two distinct 6-face shells.
+        * The separation occurs through pure translation in opposite directions along an axis defined by the midpoint of edge (V6,V7) and the midpoint of edge (V4,V5).
+        * Each 6-face shell has its interior visible (rendered with `THREE.DoubleSide`).
+        * The two shells maintain their original orientation relative to each other during separation and joining.
 
 ## How to Use
 
@@ -53,9 +59,10 @@ All detailed calculations, vertex coordinates, edge lists, and geometric propert
 4.  **Interact with On-Screen Controls:**
     * **Pause/Resume:** Click to start or stop the spinning animation.
     * **Speed Slider:** Drag to change the rotation speed.
-    * **Show Solid / Show Wireframe:** Click to switch between the solid and wireframe rendering of the model. The "Color Faces" button will be enabled/disabled accordingly.
-    * **Hide Labels / Show Labels:** Click to toggle the visibility of the numerical vertex labels.
-    * **Color Faces / Monochrome:** (Available in Solid mode only) Click to switch the solid model between multi-color face rendering and single-color rendering.
+    * **Show Solid / Show Wireframe:** Click to switch between the solid and wireframe rendering of the model (or separated pieces). The "Color Faces" button will be enabled/disabled accordingly.
+    * **Hide Labels / Show Labels:** Click to toggle the visibility of the numerical vertex labels. (Labels are automatically hidden when pieces are separated).
+    * **Color Faces / Monochrome:** (Available in Solid mode only) Click to switch the solid model (or separated pieces) between multi-color face rendering and single-color rendering.
+    * **Separate Pieces / Join Pieces:** Click to animate the separation or joining of the model into/from two 6-face shells.
 5.  **Navigate the 3D View:**
     * **Rotate:** Hold the left mouse button and drag.
     * **Zoom:** Use the mouse scroll wheel.
