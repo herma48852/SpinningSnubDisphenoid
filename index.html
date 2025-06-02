@@ -10,8 +10,8 @@
 <style>
   body {
     font-family: 'Inter', sans-serif;
-    background-color: #111827; 
-    color: #e5e7eb; 
+    background-color: #111827; /* Dark gray background */
+    color: #e5e7eb; /* Light gray text */
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -19,75 +19,75 @@
     min-height: 100vh;
     margin: 0;
     padding: 1rem;
-    overflow: hidden;
+    overflow: hidden; /* Prevent scrollbars from body */
   }
   #visualizationContainer {
     width: 100%;
-    max-width: 64rem; 
-    background-color: #1f2937; 
+    max-width: 64rem; /* Limit width on larger screens */
+    background-color: #1f2937; /* Slightly lighter dark gray for container */
     padding: 1.5rem;
-    border-radius: 0.5rem; 
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); 
+    border-radius: 0.5rem; /* Rounded corners */
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); /* Subtle shadow */
   }
   h1 {
-    font-size: 1.875rem; 
-    font-weight: 600; 
-    margin-bottom: 1rem; 
-    color: #f9fafb; 
+    font-size: 1.875rem; /* Tailwind's text-3xl */
+    font-weight: 600; /* semibold */
+    margin-bottom: 1rem; /* Spacing below title */
+    color: #f9fafb; /* Almost white title text */
     text-align: center;
   }
   #canvasContainer {
     width: 100%;
-    height: 60vh; 
+    height: 60vh; /* Responsive height */
     min-height: 400px;
     max-height: 700px;
-    border: 1px solid #374151; 
-    border-radius: 0.375rem; 
+    border: 1px solid #374151; /* Border color */
+    border-radius: 0.375rem; /* Rounded corners for canvas */
     margin-bottom: 1rem;
-    position: relative;
-    background-color: #000000; 
+    position: relative; /* For label renderer positioning */
+    background-color: #000000; /* Black background for the canvas itself */
   }
   .controls {
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
     align-items: center;
-    gap: 0.75rem; 
+    gap: 0.75rem; /* Spacing between control elements */
     margin-bottom: 0.5rem;
   }
   .controls button {
-    background-color: #3b82f6; 
+    background-color: #3b82f6; /* Blue button */
     color: white;
-    font-weight: 500; 
-    padding: 0.5rem 1rem; 
-    border-radius: 0.375rem; 
+    font-weight: 500; /* medium */
+    padding: 0.5rem 1rem;
+    border-radius: 0.375rem;
     border: none;
     cursor: pointer;
     transition: background-color 0.2s;
   }
   .controls button:hover {
-    background-color: #2563eb; 
+    background-color: #2563eb; /* Darker blue on hover */
   }
    .controls button:disabled {
-    background-color: #6b7280; 
+    background-color: #6b7280; /* Gray when disabled */
     cursor: not-allowed;
   }
   .controls label {
-    margin-right: 0.5rem; 
-    color: #d1d5db; 
+    margin-right: 0.5rem;
+    color: #d1d5db; /* Lighter gray for labels */
   }
   .controls input[type="range"] {
-    width: 120px; 
+    width: 120px;
     cursor: pointer;
   }
   .vertex-label {
     color: #ffffff;
-    background-color: rgba(0, 0, 0, 0.75); 
+    background-color: rgba(0, 0, 0, 0.75); /* Semi-transparent black background */
     padding: 2px 5px;
     border-radius: 3px;
     font-size: 12px;
     font-family: sans-serif;
-    pointer-events: none; 
+    pointer-events: none; /* Labels should not interfere with mouse controls */
   }
 </style>
 </head>
@@ -102,62 +102,62 @@
       <input type="range" id="speedSlider" min="0" max="100" value="20">
     </div>
     <button id="toggleShapeButton">Show Solid</button>
-    <button id="toggleLabelsButton">Hide Labels</button> 
-    <button id="toggleFaceColorsButton" disabled>Color Faces</button> 
-    <button id="toggleSeparationButton">Separate Pieces</button> 
+    <button id="toggleLabelsButton">Hide Labels</button>
+    <button id="toggleFaceColorsButton" disabled>Color Faces</button>
+    <button id="toggleSeparationButton">Separate Pieces</button>
   </div>
   <div id="canvasContainer">
+    <!-- Three.js canvas and label renderer will be appended here -->
     </div>
 </div>
 
 <script>
 // --- Three.js related variables ---
 let scene, camera, renderer, labelRenderer, modelGroup, orbitControls;
-let wireframeMesh, solidMesh, solidMaterial, solidEdgesMesh; 
-let vertexLabels = []; 
-let raycaster; 
+let wireframeMesh, solidMesh, solidMaterial, solidEdgesMesh;
+let vertexLabels = []; // Primary labels (0-7)
+let duplicateSeamLabels = []; // Duplicate labels for seam vertices (0,1,2,3)
+let raycaster;
 let animationId;
 let isPaused = false;
-let isSolidView = false; 
-let areLabelsVisible = true; 
-let areFacesColored = false; 
+let isSolidView = false;
+let areLabelsVisible = true;
+let areFacesColored = false;
 let rotationSpeed = 0.005;
 
 // --- Color definitions ---
-const J84_FACE_COLORS_PALETTE = [ 
-    new THREE.Color(0xff6347), // Tomato (Red-Orange)
-    new THREE.Color(0x4682b4), // SteelBlue
-    new THREE.Color(0x32cd32), // LimeGreen
-    new THREE.Color(0xffd700), // Gold (Yellow)
-    new THREE.Color(0xffa500), // Orange
-    new THREE.Color(0xda70d6)  // Orchid (Purple-ish)
+const J84_FACE_COLORS_PALETTE = [
+    new THREE.Color(0xff6347), new THREE.Color(0x4682b4), new THREE.Color(0x32cd32),
+    new THREE.Color(0xffd700), new THREE.Color(0xffa500), new THREE.Color(0xda70d6)
 ];
-let assignedFaceColors = []; 
+let assignedFaceColors = [];
 
-// --- Vertex data (global for access) ---
-let centeredVertexPositions = []; 
-let centeredLabelData = []; 
+// --- Vertex data ---
+let centeredVertexPositions = [];
+let centeredLabelData = [];
+let originalLabelPositions = []; // For primary labels
+let originalDuplicateLabelPositions = []; // For duplicate seam labels
+
+// --- Vertex to Piece Mapping for PRIMARY Label Following ---
+const vertexToPieceMap = {
+  0: 2, 1: 2, 2: 1, 3: 1, // Seam vertices (V0,V1 follow piece2; V2,V3 follow piece1)
+  4: 2, 5: 2,             // Unique to piece 2
+  6: 1, 7: 1              // Unique to piece 1
+};
 
 // --- Separation state variables ---
-let piece1Group, piece2Group; 
+let piece1Group, piece2Group;
 let isSeparated = false;
 let isSeparatingAnimating = false;
-let targetSeparationState = false; 
-let separationLerpFactor = 0; 
-const MAX_SEPARATION_DISTANCE = 1.05; // REDUCED: Was 1.5, now 1.5 * 0.7
-const SEPARATION_ANIMATION_SPEED = 0.025; 
-let axisA = new THREE.Vector3(0, 0, 1); 
+let targetSeparationState = false;
+let separationLerpFactor = 0;
+const MAX_SEPARATION_DISTANCE = 1.05;
+const SEPARATION_ANIMATION_SPEED = 0.025;
+let axisA = new THREE.Vector3(0, 0, 1);
 
-let originalLabelPositions = []; 
-
-// Define which original faces belong to which piece (6 faces each)
-const J84_FACES_PIECE1_INDICES = [2, 3, 4, 6, 7, 8]; 
+const J84_FACES_PIECE1_INDICES = [2, 3, 4, 6, 7, 8];
 const J84_FACES_PIECE2_INDICES = [0, 1, 5, 9, 10, 11];
-
-const SEAM_VERTEX_IDS = [0, 1, 2, 3]; 
-const PIECE1_UNIQUE_VERTEX_IDS = [6, 7]; 
-const PIECE2_UNIQUE_VERTEX_IDS = [4, 5]; 
-
+const SEAM_VERTEX_IDS = [0, 1, 2, 3]; // IDs of vertices that are part of the seam
 
 // --- Vector Math Utilities ---
 function subtractVectors(v1, v2) { return [v1[0] - v2[0], v1[1] - v2[1], v1[2] - v2[2]]; }
@@ -165,11 +165,7 @@ function addVectors(v1, v2) { return [v1[0] + v2[0], v1[1] + v2[1], v1[2] + v2[2
 function scaleVector(v, s) { return [v[0] * s, v[1] * s, v[2] * s]; }
 function dotProduct(v1, v2) { return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]; }
 function crossProduct(v1, v2) {
-    return [
-        v1[1] * v2[2] - v1[2] * v2[1],
-        v1[2] * v2[0] - v1[0] * v2[2],
-        v1[0] * v2[1] - v1[1] * v2[0]
-    ];
+    return [v1[1] * v2[2] - v1[2] * v2[1], v1[2] * v2[0] - v1[0] * v2[2], v1[0] * v2[1] - v1[1] * v2[0]];
 }
 function normalizeVector(v) {
     const len = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
@@ -191,498 +187,335 @@ function findQ() {
     return x;
 }
 function calculateRST(q) {
-    if (isNaN(q) || q <= 0) { console.error("Invalid q in calculateRST:", q); return { r: NaN, s: NaN, t: NaN }; }
+    if (isNaN(q) || q <= 0) { return { r: NaN, s: NaN, t: NaN }; }
     const r = Math.sqrt(q) / 2; const s_num = 1 - q; const s_den = 8 * q;
-    if (s_num < 0 || s_den <= 0) { console.error("Invalid s params:", {s_num, s_den}); return { r, s: NaN, t: NaN}; }
+    if (s_num < 0 || s_den <= 0) { return { r, s: NaN, t: NaN}; }
     const s = Math.sqrt(s_num / s_den); const t_num = 1-q;
-    if(t_num < 0){ console.error("Invalid t param:", {t_num}); return { r, s, t: NaN}; }
+    if(t_num < 0){ return { r, s, t: NaN}; }
     const t = Math.sqrt(t_num / 2); return { r, s, t };
 }
-function getVertices(r, s, t) { 
-    if (isNaN(r) || isNaN(s) || isNaN(t)) { console.error("Invalid r,s,t in getVertices:", {r,s,t}); return []; }
-    return [ 
+function getVertices(r, s, t) {
+    if (isNaN(r) || isNaN(s) || isNaN(t)) { return []; }
+    return [
         { name: "V0", coords: [ t,  0, -r], id: 0 }, { name: "V1", coords: [-t,  0, -r], id: 1 },
         { name: "V2", coords: [ 0,  t,  r], id: 2 }, { name: "V3", coords: [ 0, -t,  r], id: 3 },
         { name: "V4", coords: [ 0.5,  0,  s], id: 4 }, { name: "V5", coords: [-0.5,  0,  s], id: 5 },
         { name: "V6", coords: [ 0,  0.5, -s], id: 6 }, { name: "V7", coords: [ 0, -0.5, -s], id: 7 }
     ];
 }
-function distanceSq(v1, v2) { return (v1[0]-v2[0])**2 + (v1[1]-v2[1])**2 + (v1[2]-v2[2])**2; }
 
 // --- Face Coloring Logic ---
-const J84_FACES_INDICES = [ 
-    [0,2,4], [0,4,3], [0,3,7], [0,7,6], [0,6,2], 
-    [1,5,2], [1,2,6], [1,6,7], [1,7,3], [1,3,5], 
-    [2,5,4], [3,4,5]  
+const J84_FACES_INDICES = [
+    [0,2,4], [0,4,3], [0,3,7], [0,7,6], [0,6,2], [1,5,2], [1,2,6], [1,6,7], [1,7,3], [1,3,5], [2,5,4], [3,4,5]
 ];
-const J84_FACE_ADJACENCIES = [ 
-    [1, 4, 10], [0, 2, 11], [1, 3, 8],  [2, 4, 7],
-    [3, 0, 6],  [6, 9, 10], [5, 7, 4],  [6, 8, 3],
-    [7, 9, 2],  [8, 5, 11], [0, 5, 11], [1, 9, 10]
+const J84_FACE_ADJACENCIES = [
+    [1, 4, 10], [0, 2, 11], [1, 3, 8],  [2, 4, 7], [3, 0, 6],  [6, 9, 10],
+    [5, 7, 4],  [6, 8, 3], [7, 9, 2],  [8, 5, 11], [0, 5, 11], [1, 9, 10]
 ];
-
 function computeFaceColors() {
     assignedFaceColors = new Array(J84_FACES_INDICES.length).fill(null);
     let assignedColorIndices = new Array(J84_FACES_INDICES.length).fill(-1);
     for (let i = 0; i < J84_FACES_INDICES.length; i++) {
         let neighborColorIndices = new Set();
         J84_FACE_ADJACENCIES[i].forEach(adjFaceIndex => {
-            if (assignedColorIndices[adjFaceIndex] !== -1) {
-                neighborColorIndices.add(assignedColorIndices[adjFaceIndex]);
-            }
+            if (assignedColorIndices[adjFaceIndex] !== -1) neighborColorIndices.add(assignedColorIndices[adjFaceIndex]);
         });
         for (let c = 0; c < J84_FACE_COLORS_PALETTE.length; c++) {
             if (!neighborColorIndices.has(c)) {
-                assignedColorIndices[i] = c;
-                assignedFaceColors[i] = J84_FACE_COLORS_PALETTE[c];
-                break;
+                assignedColorIndices[i] = c; assignedFaceColors[i] = J84_FACE_COLORS_PALETTE[c]; break;
             }
         }
-        if (assignedFaceColors[i] === null) { 
-            assignedFaceColors[i] = J84_FACE_COLORS_PALETTE[i % J84_FACE_COLORS_PALETTE.length]; 
-        }
+        if (assignedFaceColors[i] === null) assignedFaceColors[i] = J84_FACE_COLORS_PALETTE[i % J84_FACE_COLORS_PALETTE.length];
     }
 }
 
-function verifyGeometricProperties(verticesObjects, edges) { /* ... Original content ... */ }
-
 // --- Piece Creation Function ---
-function createPieceVisualsGroup(pieceSpecificFaceIndices, allCenteredVertexPositions, 
+function createPieceVisualsGroup(pieceSpecificFaceIndices, allCenteredVertexPositions,
                                  globalJ84OriginalFaces, globalAssignedFaceColors) {
-    const pieceSolidPositions = [];
-    const pieceSolidColors = [];
-    const pieceWireframePoints = [];
-
+    const pieceSolidPositions = [], pieceSolidColors = [], pieceWireframePoints = [];
     pieceSpecificFaceIndices.forEach(originalFaceGlobalIndex => {
-        const faceVertexIds = globalJ84OriginalFaces[originalFaceGlobalIndex]; 
-        const faceColor = globalAssignedFaceColors[originalFaceGlobalIndex]; 
-
+        const faceVertexIds = globalJ84OriginalFaces[originalFaceGlobalIndex];
+        const faceColor = globalAssignedFaceColors[originalFaceGlobalIndex];
         faceVertexIds.forEach(vertexId => {
             pieceSolidPositions.push(...allCenteredVertexPositions[vertexId]);
-            if (faceColor) {
-                 pieceSolidColors.push(faceColor.r, faceColor.g, faceColor.b);
-            } else {
-                 pieceSolidColors.push(0.5, 0.5, 0.5); 
-            }
+            pieceSolidColors.push(faceColor.r, faceColor.g, faceColor.b);
         });
         for (let i = 0; i < faceVertexIds.length; i++) {
-            const vStartId = faceVertexIds[i];
-            const vEndId = faceVertexIds[(i + 1) % faceVertexIds.length];
-            pieceWireframePoints.push(...allCenteredVertexPositions[vStartId]);
-            pieceWireframePoints.push(...allCenteredVertexPositions[vEndId]);
+            const vStartId = faceVertexIds[i], vEndId = faceVertexIds[(i + 1) % faceVertexIds.length];
+            pieceWireframePoints.push(...allCenteredVertexPositions[vStartId], ...allCenteredVertexPositions[vEndId]);
         }
     });
-
     const pieceSolidGeom = new THREE.BufferGeometry();
     pieceSolidGeom.setAttribute('position', new THREE.Float32BufferAttribute(pieceSolidPositions, 3));
-    if (pieceSolidColors.length > 0) {
-        pieceSolidGeom.setAttribute('color', new THREE.Float32BufferAttribute(pieceSolidColors, 3));
-    }
+    pieceSolidGeom.setAttribute('color', new THREE.Float32BufferAttribute(pieceSolidColors, 3));
     pieceSolidGeom.computeVertexNormals();
-    
     const pieceSolidMaterial = new THREE.MeshPhongMaterial({
-        shininess: 80,
-        specular: 0x222222,
-        flatShading: true,
-        vertexColors: false, 
-        color: 0x6082b6,     
-        polygonOffset: true,
-        polygonOffsetFactor: 1,
-        polygonOffsetUnits: 1,
-        side: THREE.DoubleSide 
+        shininess: 80, specular: 0x222222, flatShading: true, vertexColors: false,
+        color: 0x6082b6, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, side: THREE.DoubleSide
     });
-    const pieceSolidMesh = new THREE.Mesh(pieceSolidGeom, pieceSolidMaterial);
-    pieceSolidMesh.name = 'solid';
-
-    const pieceEdgesGeom = new THREE.EdgesGeometry(pieceSolidMesh.geometry, 15); 
+    const pieceSolidMesh = new THREE.Mesh(pieceSolidGeom, pieceSolidMaterial); pieceSolidMesh.name = 'solid';
+    const pieceEdgesGeom = new THREE.EdgesGeometry(pieceSolidMesh.geometry, 15);
     const pieceEdgeMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1.5 });
-    const pieceEdgesMesh = new THREE.LineSegments(pieceEdgesGeom, pieceEdgeMaterial);
-    pieceEdgesMesh.name = 'edges';
-    
+    const pieceEdgesMesh = new THREE.LineSegments(pieceEdgesGeom, pieceEdgeMaterial); pieceEdgesMesh.name = 'edges';
     const pieceWireframeGeom = new THREE.BufferGeometry();
     pieceWireframeGeom.setAttribute('position', new THREE.Float32BufferAttribute(pieceWireframePoints, 3));
     const pieceWireframeMaterial = new THREE.LineBasicMaterial({ color: 0x00dd00, linewidth: 2 });
-    const pieceWireframeMesh = new THREE.LineSegments(pieceWireframeGeom, pieceWireframeMaterial);
-    pieceWireframeMesh.name = 'wireframe';
-
+    const pieceWireframeMesh = new THREE.LineSegments(pieceWireframeGeom, pieceWireframeMaterial); pieceWireframeMesh.name = 'wireframe';
     const pieceGroup = new THREE.Group();
     pieceGroup.add(pieceSolidMesh, pieceEdgesMesh, pieceWireframeMesh);
-    
-    pieceSolidMesh.visible = false; 
-    pieceEdgesMesh.visible = false;
-    pieceWireframeMesh.visible = false;
-    pieceGroup.visible = false; 
-
+    [pieceSolidMesh, pieceEdgesMesh, pieceWireframeMesh, pieceGroup].forEach(o => o.visible = false);
     return pieceGroup;
 }
 
-
+// --- Main Initialization ---
 function performCalculationsAndSetupVisualization() {
-    console.log("Snub Disphenoid Calculator & Visualizer...");
-    const q_val = findQ();
-    if (isNaN(q_val)) { console.error("Fatal: Could not calculate 'q'."); return; }
-    const { r, s, t } = calculateRST(q_val);
-    if (isNaN(r) || isNaN(s) || isNaN(t)) { console.error("Fatal: Could not calculate 'r,s,t'."); return; }
-    const verticesObjects = getVertices(r, s, t); 
-    if (verticesObjects.length === 0) { console.error("Fatal: Could not generate vertices."); return; }
-    
-    const numVertices = verticesObjects.length;
-    const centroid = [0,0,0]; 
-    
-    centeredVertexPositions = verticesObjects.map(v => subtractVectors(v.coords, centroid));
-    centeredLabelData = verticesObjects.map((v,i)=>({id:v.id, name: v.name, coords:centeredVertexPositions[i]}));
-    
-    const edges = []; 
-    const edgeLengthSqThresh = 1.0, tolerance = 1e-5;
-    for (let i=0; i<verticesObjects.length; i++) {
-        for (let j=i+1; j<verticesObjects.length; j++) {
-            if (Math.abs(distanceSq(verticesObjects[i].coords, verticesObjects[j].coords) - edgeLengthSqThresh) < tolerance) {
-                edges.push({v1:verticesObjects[i],v2:verticesObjects[j],dist:1.0});
-            }
-        }
-    }
-    console.log(`q ≈ ${q_val.toFixed(10)}`);
-    verifyGeometricProperties(verticesObjects, edges); 
-    computeFaceColors(); 
-
-    const m1_coords = scaleVector(addVectors(centeredVertexPositions[6], centeredVertexPositions[7]), 0.5);
-    const m2_coords = scaleVector(addVectors(centeredVertexPositions[4], centeredVertexPositions[5]), 0.5);
-    const m1 = new THREE.Vector3().fromArray(m1_coords);
-    const m2 = new THREE.Vector3().fromArray(m2_coords);
+    const q_val = findQ(); if (isNaN(q_val)) return;
+    const { r, s, t } = calculateRST(q_val); if (isNaN(r) || isNaN(s) || isNaN(t)) return;
+    const verticesObjects = getVertices(r, s, t); if (verticesObjects.length === 0) return;
+    centeredVertexPositions = verticesObjects.map(v => v.coords); // Assuming already centered
+    centeredLabelData = verticesObjects.map(v => ({id:v.id, name: v.name, coords:v.coords}));
+    computeFaceColors();
+    const m1 = new THREE.Vector3().fromArray(scaleVector(addVectors(centeredVertexPositions[6], centeredVertexPositions[7]), 0.5));
+    const m2 = new THREE.Vector3().fromArray(scaleVector(addVectors(centeredVertexPositions[4], centeredVertexPositions[5]), 0.5));
     axisA.subVectors(m2, m1).normalize();
-    console.log("Calculated Separation Axis A:", axisA);
-
-    console.log("Initializing 3D Visualization...");
     setupThreeJSVisualization();
 }
 
-function setupThreeJSVisualization() { 
+// --- Three.js Setup ---
+function setupThreeJSVisualization() {
     const canvasContainer = document.getElementById('canvasContainer');
     while (canvasContainer.firstChild) canvasContainer.removeChild(canvasContainer.firstChild);
     if (animationId) cancelAnimationFrame(animationId);
 
-    scene = new THREE.Scene();
-    raycaster = new THREE.Raycaster(); 
-    const aspect = canvasContainer.clientWidth / canvasContainer.clientHeight;
-    camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
-    camera.position.set(1.2, 1.2, 2.2); 
-
+    scene = new THREE.Scene(); raycaster = new THREE.Raycaster();
+    camera = new THREE.PerspectiveCamera(75, canvasContainer.clientWidth / canvasContainer.clientHeight, 0.1, 1000);
+    camera.position.set(1.2, 1.2, 2.2);
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
     canvasContainer.appendChild(renderer.domElement);
-
     labelRenderer = new THREE.CSS2DRenderer();
     labelRenderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
-    labelRenderer.domElement.style.position = 'absolute';
-    labelRenderer.domElement.style.top = '0px';
+    labelRenderer.domElement.style.position = 'absolute'; labelRenderer.domElement.style.top = '0px';
     labelRenderer.domElement.style.pointerEvents = 'none';
     canvasContainer.appendChild(labelRenderer.domElement);
-
     orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
     orbitControls.enableDamping = true; orbitControls.dampingFactor = 0.05;
-    orbitControls.minDistance = 0.5; orbitControls.maxDistance = 20; 
+    
+    // Lights - Corrected
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    dirLight.position.set(1.5, 2, 1); // Set position of the light
+    scene.add(dirLight); // Add the light object itself
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); scene.add(ambientLight);
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2); dirLight.position.set(1.5,2,1); scene.add(dirLight);
+    modelGroup = new THREE.Group(); scene.add(modelGroup);
 
-    modelGroup = new THREE.Group(); 
-    scene.add(modelGroup);
-
-    const wireframePoints = [];
-    const edgeLengthSqThresh = 1.0, tolerance = 1e-5;
+    // Combined wireframe
+    const wfPoints = [];
     for (let i=0; i<centeredVertexPositions.length; i++) {
         for (let j=i+1; j<centeredVertexPositions.length; j++) {
-            const distSq = (centeredVertexPositions[i][0]-centeredVertexPositions[j][0])**2 +
-                           (centeredVertexPositions[i][1]-centeredVertexPositions[j][1])**2 +
-                           (centeredVertexPositions[i][2]-centeredVertexPositions[j][2])**2;
-            if (Math.abs(distSq - edgeLengthSqThresh) < tolerance) {
-                wireframePoints.push(...centeredVertexPositions[i]);
-                wireframePoints.push(...centeredVertexPositions[j]);
-            }
+            const dSq = (centeredVertexPositions[i][0]-centeredVertexPositions[j][0])**2 + (centeredVertexPositions[i][1]-centeredVertexPositions[j][1])**2 + (centeredVertexPositions[i][2]-centeredVertexPositions[j][2])**2;
+            if (Math.abs(dSq - 1.0) < 1e-5) wfPoints.push(...centeredVertexPositions[i], ...centeredVertexPositions[j]);
         }
     }
-    const wireframeGeom = new THREE.BufferGeometry();
-    wireframeGeom.setAttribute('position', new THREE.Float32BufferAttribute(wireframePoints, 3));
-    const wireframeMaterial = new THREE.LineBasicMaterial({ color: 0x00dd00, linewidth: 2 }); 
-    wireframeMesh = new THREE.LineSegments(wireframeGeom, wireframeMaterial);
+    const wfGeom = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(wfPoints, 3));
+    wireframeMesh = new THREE.LineSegments(wfGeom, new THREE.LineBasicMaterial({ color: 0x00dd00, linewidth: 2 }));
     modelGroup.add(wireframeMesh);
-    
-    const solidGeometry = new THREE.BufferGeometry();
-    const positionsArrayForSolid = [];
-    const colorsArrayForSolid = [];
-    J84_FACES_INDICES.forEach((faceVertexIds, faceIndex) => {
-        const faceColor = assignedFaceColors[faceIndex];
-        faceVertexIds.forEach(vertexId => {
-            positionsArrayForSolid.push(...centeredVertexPositions[vertexId]);
-            colorsArrayForSolid.push(faceColor.r, faceColor.g, faceColor.b);
-        });
-    });
-    solidGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positionsArrayForSolid, 3));
-    solidGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colorsArrayForSolid, 3));
-    solidGeometry.computeVertexNormals(); 
-    solidMaterial = new THREE.MeshPhongMaterial({ 
-        shininess: 80, specular: 0x222222, flatShading: true, vertexColors: false, 
-        color: 0x6082b6, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
-        side: THREE.FrontSide 
-    });
-    solidMesh = new THREE.Mesh(solidGeometry, solidMaterial);
-    modelGroup.add(solidMesh);
 
-    const edgesGeometry = new THREE.EdgesGeometry(solidMesh.geometry, 1); 
-    const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1.5 });
-    solidEdgesMesh = new THREE.LineSegments(edgesGeometry, edgeMaterial);
+    // Combined solid
+    const solidPos = [], solidColors = [];
+    J84_FACES_INDICES.forEach((faceVIds, fIdx) => faceVIds.forEach(vId => {
+        solidPos.push(...centeredVertexPositions[vId]);
+        solidColors.push(assignedFaceColors[fIdx].r, assignedFaceColors[fIdx].g, assignedFaceColors[fIdx].b);
+    }));
+    const solidGeom = new THREE.BufferGeometry();
+    solidGeom.setAttribute('position', new THREE.Float32BufferAttribute(solidPos, 3));
+    solidGeom.setAttribute('color', new THREE.Float32BufferAttribute(solidColors, 3));
+    solidGeom.computeVertexNormals();
+    solidMaterial = new THREE.MeshPhongMaterial({ shininess: 80, specular: 0x222222, flatShading: true, vertexColors: false, color: 0x6082b6, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, side: THREE.FrontSide });
+    solidMesh = new THREE.Mesh(solidGeom, solidMaterial); modelGroup.add(solidMesh);
+    solidEdgesMesh = new THREE.LineSegments(new THREE.EdgesGeometry(solidMesh.geometry, 1), new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1.5 }));
     modelGroup.add(solidEdgesMesh);
 
     piece1Group = createPieceVisualsGroup(J84_FACES_PIECE1_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors);
     piece2Group = createPieceVisualsGroup(J84_FACES_PIECE2_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors);
     modelGroup.add(piece1Group, piece2Group);
 
-    vertexLabels = []; 
-    originalLabelPositions = []; 
+    // Create Primary Labels (0-7)
+    vertexLabels = []; originalLabelPositions = [];
     centeredLabelData.forEach(vertex => {
-        const labelDiv = document.createElement('div');
-        labelDiv.className = 'vertex-label';
-        labelDiv.textContent = vertex.id;
+        const labelDiv = document.createElement('div'); labelDiv.className = 'vertex-label'; labelDiv.textContent = vertex.id;
         const label = new THREE.CSS2DObject(labelDiv);
         const posVec = new THREE.Vector3().fromArray(vertex.coords);
-        label.position.copy(posVec); 
-        originalLabelPositions[vertex.id] = posVec.clone(); 
-        modelGroup.add(label); 
-        vertexLabels[vertex.id] = label; 
+        label.position.copy(posVec);
+        originalLabelPositions[vertex.id] = posVec.clone();
+        modelGroup.add(label); vertexLabels[vertex.id] = label;
     });
-    
-    isPaused = false; document.getElementById('pauseButton').textContent = 'Pause';
-    isSolidView = false; 
-    areLabelsVisible = true; 
-    areFacesColored = false; 
-    
-    updateShapeAndColorControls(); 
 
+    // Create Duplicate Labels for Seam Vertices (0,1,2,3)
+    duplicateSeamLabels = []; originalDuplicateLabelPositions = [];
+    SEAM_VERTEX_IDS.forEach(vertexId => {
+        const originalVertexData = centeredLabelData.find(v => v.id === vertexId);
+        if (originalVertexData) {
+            const dupLabelDiv = document.createElement('div'); dupLabelDiv.className = 'vertex-label'; dupLabelDiv.textContent = vertexId;
+            const dupLabel = new THREE.CSS2DObject(dupLabelDiv);
+            const posVec = new THREE.Vector3().fromArray(originalVertexData.coords);
+            dupLabel.position.copy(posVec); // Initial position same as original
+            originalDuplicateLabelPositions[vertexId] = posVec.clone();
+            dupLabel.visible = false; // Initially hidden
+            modelGroup.add(dupLabel);
+            duplicateSeamLabels[vertexId] = dupLabel;
+        }
+    });
+
+    updateShapeAndColorControls();
     rotationSpeed = parseFloat(document.getElementById('speedSlider').value) / 2000;
-
     animate();
     window.addEventListener('resize', onWindowResize, false);
 }
 
-
+// --- UI Update Function ---
 function updateShapeAndColorControls() {
-    const toggleShapeBtn = document.getElementById('toggleShapeButton');
-    const toggleFaceColorsBtn = document.getElementById('toggleFaceColorsButton');
-    const toggleSeparationBtn = document.getElementById('toggleSeparationButton');
-
-    const piece1Solid = piece1Group.getObjectByName('solid');
-    const piece1Edges = piece1Group.getObjectByName('edges');
-    const piece1Wireframe = piece1Group.getObjectByName('wireframe');
-    const piece2Solid = piece2Group.getObjectByName('solid');
-    const piece2Edges = piece2Group.getObjectByName('edges');
-    const piece2Wireframe = piece2Group.getObjectByName('wireframe');
-
-    if (!isSeparated && !isSeparatingAnimating) { 
-        wireframeMesh.visible = !isSolidView;
-        solidMesh.visible = isSolidView;
-        solidEdgesMesh.visible = isSolidView;
-        piece1Group.visible = false;
-        piece2Group.visible = false;
-    } else { 
-        wireframeMesh.visible = false;
-        solidMesh.visible = false;
-        solidEdgesMesh.visible = false;
-        piece1Group.visible = true;
-        piece2Group.visible = true;
-
-        if (piece1Solid) piece1Solid.visible = isSolidView;
-        if (piece1Edges) piece1Edges.visible = isSolidView;
-        if (piece1Wireframe) piece1Wireframe.visible = !isSolidView;
-
-        if (piece2Solid) piece2Solid.visible = isSolidView;
-        if (piece2Edges) piece2Edges.visible = isSolidView;
-        if (piece2Wireframe) piece2Wireframe.visible = !isSolidView;
+    const piece1Solid = piece1Group.getObjectByName('solid'), piece2Solid = piece2Group.getObjectByName('solid');
+    wireframeMesh.visible = !isSolidView && !isSeparated && !isSeparatingAnimating;
+    solidMesh.visible = isSolidView && !isSeparated && !isSeparatingAnimating;
+    solidEdgesMesh.visible = isSolidView && !isSeparated && !isSeparatingAnimating;
+    piece1Group.visible = isSeparated || isSeparatingAnimating;
+    piece2Group.visible = isSeparated || isSeparatingAnimating;
+    if (isSeparated || isSeparatingAnimating) {
+        piece1Group.getObjectByName('solid').visible = isSolidView;
+        piece1Group.getObjectByName('edges').visible = isSolidView;
+        piece1Group.getObjectByName('wireframe').visible = !isSolidView;
+        piece2Group.getObjectByName('solid').visible = isSolidView;
+        piece2Group.getObjectByName('edges').visible = isSolidView;
+        piece2Group.getObjectByName('wireframe').visible = !isSolidView;
     }
-
-    const materialsToUpdate = [solidMaterial];
-    if (piece1Solid) materialsToUpdate.push(piece1Solid.material);
-    if (piece2Solid) materialsToUpdate.push(piece2Solid.material);
-    
-    materialsToUpdate.filter(m => m).forEach(mat => {
-        let currentBaseColor = 0x6082b6; 
-        if (piece2Solid && piece2Solid.material && mat === piece2Solid.material) {
-            currentBaseColor = 0xff8c00; 
-        }
-
+    [solidMaterial, piece1Solid.material, piece2Solid.material].forEach(mat => {
+        let baseColor = (mat === piece2Solid.material && (isSeparated || isSeparatingAnimating) && !areFacesColored) ? 0xff8c00 : 0x6082b6;
         mat.vertexColors = areFacesColored;
-        if (areFacesColored) {
-            mat.color.set(0xffffff); 
-            mat.shininess = 10;
-            mat.specular.set(0x111111);
-        } else {
-            mat.color.set(currentBaseColor); 
-            mat.shininess = 80;
-            mat.specular.set(0x222222);
-        }
+        mat.color.set(areFacesColored ? 0xffffff : baseColor);
+        mat.shininess = areFacesColored ? 10 : 80;
+        mat.specular.set(areFacesColored ? 0x111111 : 0x222222);
         mat.needsUpdate = true;
     });
-    
-    if(piece1Solid && piece1Solid.material) piece1Solid.material.side = THREE.DoubleSide;
-    if(piece2Solid && piece2Solid.material) piece2Solid.material.side = THREE.DoubleSide;
-
-
-    toggleShapeBtn.textContent = isSolidView ? 'Show Wireframe' : 'Show Solid';
-    toggleFaceColorsBtn.disabled = !isSolidView; 
-    toggleFaceColorsBtn.textContent = areFacesColored ? 'Monochrome' : 'Color Faces';
+    document.getElementById('toggleShapeButton').textContent = isSolidView ? 'Show Wireframe' : 'Show Solid';
+    document.getElementById('toggleFaceColorsButton').disabled = !isSolidView;
+    document.getElementById('toggleFaceColorsButton').textContent = areFacesColored ? 'Monochrome' : 'Color Faces';
     document.getElementById('toggleLabelsButton').textContent = areLabelsVisible ? 'Hide Labels' : 'Show Labels';
-    toggleSeparationBtn.textContent = (isSeparated || (isSeparatingAnimating && targetSeparationState)) ? 'Join Pieces' : 'Separate Pieces';
+    document.getElementById('toggleSeparationButton').textContent = (isSeparated || (isSeparatingAnimating && targetSeparationState)) ? 'Join Pieces' : 'Separate Pieces';
 }
 
-
+// --- Window Resize ---
 function onWindowResize() {
-    const canvasContainer = document.getElementById('canvasContainer');
-    if (!camera || !renderer || !labelRenderer || !canvasContainer || canvasContainer.clientWidth === 0 || canvasContainer.clientHeight === 0) return;
-    const newWidth = canvasContainer.clientWidth, newHeight = canvasContainer.clientHeight;
-    camera.aspect = newWidth / newHeight; camera.updateProjectionMatrix();
-    renderer.setSize(newWidth, newHeight); labelRenderer.setSize(newWidth, newHeight);
+    if (!camera || !renderer || !labelRenderer) return;
+    const c = document.getElementById('canvasContainer');
+    camera.aspect = c.clientWidth / c.clientHeight; camera.updateProjectionMatrix();
+    renderer.setSize(c.clientWidth, c.clientHeight); labelRenderer.setSize(c.clientWidth, c.clientHeight);
 }
 
+// --- Animation Loop ---
 function animate() {
     animationId = requestAnimationFrame(animate);
-    if (orbitControls) orbitControls.update();
-    
-    if (!isPaused && modelGroup && !isSeparatingAnimating) { 
-        modelGroup.rotation.x += rotationSpeed * 0.3;
-        modelGroup.rotation.y += rotationSpeed * 0.7;
-        modelGroup.rotation.z += rotationSpeed * 0.1;
+    orbitControls.update();
+    if (!isPaused && modelGroup && !isSeparatingAnimating) {
+        modelGroup.rotation.y += rotationSpeed * 0.7; // Simplified rotation
     }
-
     if (isSeparatingAnimating) {
-        if (targetSeparationState === true) { 
-            separationLerpFactor += SEPARATION_ANIMATION_SPEED;
-            if (separationLerpFactor >= 1) {
-                separationLerpFactor = 1;
-                isSeparatingAnimating = false;
-                isSeparated = true;
-                updateShapeAndColorControls(); 
-            }
-        } else { 
-            separationLerpFactor -= SEPARATION_ANIMATION_SPEED;
-            if (separationLerpFactor <= 0) {
-                separationLerpFactor = 0;
-                isSeparatingAnimating = false;
-                isSeparated = false;
-                updateShapeAndColorControls();
-            }
+        separationLerpFactor += targetSeparationState ? SEPARATION_ANIMATION_SPEED : -SEPARATION_ANIMATION_SPEED;
+        separationLerpFactor = Math.max(0, Math.min(1, separationLerpFactor));
+        if ((targetSeparationState && separationLerpFactor === 1) || (!targetSeparationState && separationLerpFactor === 0)) {
+            isSeparatingAnimating = false; isSeparated = targetSeparationState;
+            updateShapeAndColorControls();
         }
-        
-        const currentActualSeparation = separationLerpFactor * MAX_SEPARATION_DISTANCE;
-        if (piece1Group && piece2Group) {
-            piece1Group.position.copy(axisA).multiplyScalar(-currentActualSeparation); 
-            piece2Group.position.copy(axisA).multiplyScalar(currentActualSeparation);  
-        }
+        const currentSep = separationLerpFactor * MAX_SEPARATION_DISTANCE;
+        piece1Group.position.copy(axisA).multiplyScalar(-currentSep);
+        piece2Group.position.copy(axisA).multiplyScalar(currentSep);
     }
+    camera.updateMatrixWorld(true); modelGroup.updateMatrixWorld(true);
+    const camWorldPos = new THREE.Vector3(); camera.getWorldPosition(camWorldPos);
 
-    if (camera) camera.updateMatrixWorld(true); 
-    if (modelGroup) modelGroup.updateMatrixWorld(true); 
-
-    if (vertexLabels.length > 0 && originalLabelPositions.length > 0) {
-        const cameraWorldPosition = new THREE.Vector3();
-        camera.getWorldPosition(cameraWorldPosition);
-
-        vertexLabels.forEach((label, vertexId) => {
-            if (!label) return; 
-
-            let finalLabelPosition = new THREE.Vector3();
-            let showThisLabel = areLabelsVisible;
-
-            if (isSeparated || isSeparatingAnimating) {
-                showThisLabel = false; 
-            } else { 
-                finalLabelPosition.copy(originalLabelPositions[vertexId]);
+    // Handle Primary Labels (0-7)
+    vertexLabels.forEach((label, vertexId) => {
+        if (!label || !originalLabelPositions[vertexId]) return;
+        let finalPos = new THREE.Vector3();
+        let show = areLabelsVisible;
+        let occlusionMesh = solidMesh;
+        if (isSeparated || isSeparatingAnimating) {
+            const pieceNum = vertexToPieceMap[vertexId];
+            const targetGroup = (pieceNum === 1) ? piece1Group : piece2Group;
+            if (targetGroup) {
+                finalPos.copy(originalLabelPositions[vertexId]).add(targetGroup.position);
+                occlusionMesh = targetGroup.getObjectByName('solid');
+            } else { finalPos.copy(originalLabelPositions[vertexId]); }
+        } else {
+            finalPos.copy(originalLabelPositions[vertexId]);
+        }
+        label.position.copy(finalPos);
+        label.visible = show;
+        if (show && isSolidView && occlusionMesh && occlusionMesh.visible && raycaster) {
+            const lblWorldPos = new THREE.Vector3().copy(label.position).applyMatrix4(modelGroup.matrixWorld);
+            const dir = new THREE.Vector3().subVectors(lblWorldPos, camWorldPos);
+            const dist = dir.length();
+            if (dist > 1e-5) {
+                raycaster.set(camWorldPos, dir.normalize());
+                const intersects = raycaster.intersectObject(occlusionMesh, false);
+                if (intersects.length > 0 && intersects[0].distance < dist - 0.05) label.visible = false;
             }
-            
-            label.position.copy(finalLabelPosition);
-            label.visible = showThisLabel;
+        }
+    });
 
-            if (showThisLabel) { 
-                let activeSolidMeshForOcclusion = solidMesh; 
-                                
-                if (activeSolidMeshForOcclusion && activeSolidMeshForOcclusion.visible && raycaster) {
-                    const labelWorldPosition = new THREE.Vector3().copy(label.position).applyMatrix4(modelGroup.matrixWorld);
-                    const directionToLabel = new THREE.Vector3().subVectors(labelWorldPosition, cameraWorldPosition);
-                    const distanceToLabel = directionToLabel.length();
-                    
-                    if (distanceToLabel > 1e-5) {
-                        directionToLabel.normalize();
-                        raycaster.set(cameraWorldPosition, directionToLabel);
-                        const intersects = raycaster.intersectObject(activeSolidMeshForOcclusion, false);
-                        if (intersects.length > 0 && intersects[0].distance < distanceToLabel - 0.05) {
-                            label.visible = false; 
-                        }
-                    }
+    // Handle Duplicate Seam Labels (0,1,2,3)
+    SEAM_VERTEX_IDS.forEach(vertexId => {
+        const dupLabel = duplicateSeamLabels[vertexId];
+        if (!dupLabel || !originalDuplicateLabelPositions[vertexId]) return;
+        let showDuplicate = areLabelsVisible && (isSeparated || isSeparatingAnimating);
+        dupLabel.visible = showDuplicate;
+        if (showDuplicate) {
+            let finalDupPos = new THREE.Vector3();
+            let occlusionMeshDup;
+            // V0, V1 duplicates follow Piece 1 (V6,V7 shell)
+            // V2, V3 duplicates follow Piece 2 (V4,V5 shell)
+            if (vertexId === 0 || vertexId === 1) { // These duplicates go with piece1
+                finalDupPos.copy(originalDuplicateLabelPositions[vertexId]).add(piece1Group.position);
+                occlusionMeshDup = piece1Group.getObjectByName('solid');
+            } else { // vertexId is 2 or 3, these duplicates go with piece2
+                finalDupPos.copy(originalDuplicateLabelPositions[vertexId]).add(piece2Group.position);
+                occlusionMeshDup = piece2Group.getObjectByName('solid');
+            }
+            dupLabel.position.copy(finalDupPos);
+            if (isSolidView && occlusionMeshDup && occlusionMeshDup.visible && raycaster) {
+                const lblWorldPos = new THREE.Vector3().copy(dupLabel.position).applyMatrix4(modelGroup.matrixWorld);
+                const dir = new THREE.Vector3().subVectors(lblWorldPos, camWorldPos);
+                const dist = dir.length();
+                if (dist > 1e-5) {
+                    raycaster.set(camWorldPos, dir.normalize());
+                    const intersects = raycaster.intersectObject(occlusionMeshDup, false);
+                    if (intersects.length > 0 && intersects[0].distance < dist - 0.05) dupLabel.visible = false;
                 }
             }
-        });
-    }
+        }
+    });
 
-    if (renderer && scene && camera) renderer.render(scene, camera);
-    if (labelRenderer && scene && camera) labelRenderer.render(scene, camera);
+    renderer.render(scene, camera); labelRenderer.render(scene, camera);
 }
 
 // --- Event Listeners ---
-document.getElementById('pauseButton').addEventListener('click', () => {
-    isPaused = !isPaused;
-    document.getElementById('pauseButton').textContent = isPaused ? 'Resume' : 'Pause';
-});
-document.getElementById('speedSlider').addEventListener('input', (event) => {
-    rotationSpeed = parseFloat(event.target.value) / 2000;
-});
-
-document.getElementById('toggleShapeButton').addEventListener('click', () => {
-    isSolidView = !isSolidView;
-    updateShapeAndColorControls();
-});
-
-document.getElementById('toggleLabelsButton').addEventListener('click', () => {
-    areLabelsVisible = !areLabelsVisible;
-    document.getElementById('toggleLabelsButton').textContent = areLabelsVisible ? 'Hide Labels' : 'Show Labels';
-});
-
-document.getElementById('toggleFaceColorsButton').addEventListener('click', function() {
-    if (!isSolidView) return; 
-    areFacesColored = !areFacesColored;
-    updateShapeAndColorControls();
-});
-
-document.getElementById('toggleSeparationButton').addEventListener('click', () => {
-    if (isSeparatingAnimating) return; 
-    targetSeparationState = !isSeparated; 
-    isSeparatingAnimating = true;
-    updateShapeAndColorControls(); 
-});
-
+document.getElementById('pauseButton').addEventListener('click', () => { isPaused = !isPaused; document.getElementById('pauseButton').textContent = isPaused ? 'Resume' : 'Pause'; });
+document.getElementById('speedSlider').addEventListener('input', (e) => { rotationSpeed = parseFloat(e.target.value) / 2000; });
+document.getElementById('toggleShapeButton').addEventListener('click', () => { isSolidView = !isSolidView; updateShapeAndColorControls(); });
+document.getElementById('toggleLabelsButton').addEventListener('click', () => { areLabelsVisible = !areLabelsVisible; updateShapeAndColorControls(); }); // updateShapeAndColorControls also updates button text
+document.getElementById('toggleFaceColorsButton').addEventListener('click', () => { if(isSolidView) { areFacesColored = !areFacesColored; updateShapeAndColorControls(); }});
+document.getElementById('toggleSeparationButton').addEventListener('click', () => { if (!isSeparatingAnimating) { targetSeparationState = !isSeparated; isSeparatingAnimating = true; updateShapeAndColorControls(); }});
 
 window.onload = performCalculationsAndSetupVisualization;
 window.addEventListener('beforeunload', () => {
     if (animationId) cancelAnimationFrame(animationId);
     if (renderer) renderer.dispose();
-    if (labelRenderer && labelRenderer.domElement && labelRenderer.domElement.parentNode) {
-        if (labelRenderer.domElement.parentNode) {
-             labelRenderer.domElement.parentNode.removeChild(labelRenderer.domElement);
-        }
-    }
-    if (scene) {
-        scene.traverse(object => {
-            if(object.geometry) object.geometry.dispose();
-            if(object.material){
-                if(Array.isArray(object.material)) {
-                    object.material.forEach(mat => {if(mat.dispose) mat.dispose();});
-                } else if(object.material.dispose) {
-                    object.material.dispose();
-                }
-            }
-        });
-    }
+    if (labelRenderer && labelRenderer.domElement.parentNode) labelRenderer.domElement.parentNode.removeChild(labelRenderer.domElement);
+    if (scene) scene.traverse(o => { if(o.geometry) o.geometry.dispose(); if(o.material) (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>m.dispose&&m.dispose()); });
     window.removeEventListener('resize', onWindowResize);
 });
-
 </script>
 </body>
 </html>
