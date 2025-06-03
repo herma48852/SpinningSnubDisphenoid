@@ -136,6 +136,10 @@ let cameraPhi = Math.PI / 4; // vertical angle
 let cameraTarget = new THREE.Vector3(0, 0, 0);
 let cameraPanOffset = new THREE.Vector3(0, 0, 0);
 
+// --- Variables for orbit interaction ---
+let wasPausedBeforeOrbit = false; 
+let isOrbiting = false;           
+
 // --- Color definitions ---
 const J84_FACE_COLORS_PALETTE = [
     new THREE.Color(0xff6347), new THREE.Color(0x4682b4), new THREE.Color(0x32cd32),
@@ -146,17 +150,17 @@ let assignedFaceColors = [];
 // --- Vertex data ---
 let centeredVertexPositions = [];
 let centeredLabelData = [];
-let originalLabelPositions = []; // For primary labels
-let originalDuplicateLabelPositions = []; // For duplicate seam labels
+let originalLabelPositions = []; 
+let originalDuplicateLabelPositions = []; 
 
 // --- Vertex to Piece Mapping for PRIMARY Label Following ---
 const vertexToPieceMap = {
-  0: 2, 1: 2, 2: 1, 3: 1, // Seam vertices (V0,V1 follow piece2; V2,V3 follow piece1)
-  4: 2, 5: 2,             // Unique to piece 2 (Cap 2)
-  6: 1, 7: 1              // Unique to piece 1 (Cap 1)
+  0: 2, 1: 2, 2: 1, 3: 1, 
+  4: 2, 5: 2,             
+  6: 1, 7: 1              
 };
 
-// --- NEW INDEPENDENT SEPARATION STATE VARIABLES ---
+// --- INDEPENDENT SEPARATION STATE VARIABLES ---
 let piece1Group, piece2Group, piece1CapGroup, piece2CapGroup;
 
 // Core Separation State
@@ -172,19 +176,19 @@ let targetCapSeparationState = false;
 let capSeparationLerpFactor = 0;
 
 // Constants
-const MAX_CORE_SEPARATION_DISTANCE = 1.05;
-const MAX_CAP_SEPARATION_DISTANCE = 1.2; // Adjusted from 2.5 back to a more reasonable value, can be tuned
+const MAX_CORE_SEPARATION_DISTANCE = 0.7875; // MODIFIED: Was 1.05, reduced by 25%
+const MAX_CAP_SEPARATION_DISTANCE = 1.2; 
 const CORE_SEPARATION_ANIMATION_SPEED = 0.025;
 const CAP_SEPARATION_ANIMATION_SPEED = 0.025;
-let coreAxisA = new THREE.Vector3(0, 0, 1); // Will be recalculated: axis from M(V6,V7) to M(V4,V5)
+let coreAxisA = new THREE.Vector3(0, 0, 1); 
 
-const J84_FACES_PIECE1_INDICES = [2, 4, 6, 8]; // Core faces for piece 1
-const J84_FACES_PIECE2_INDICES = [0, 1, 5, 9]; // Core faces for piece 2
-const J84_FACES_PIECE1_CAP_INDICES = [3, 7]; // Cap faces for piece 1 - triangles sharing edge (V6,V7)
-const J84_FACES_PIECE2_CAP_INDICES = [10, 11]; // Cap faces for piece 2 - triangles sharing edge (V4,V5)
-const SEAM_VERTEX_IDS = [0, 1, 2, 3]; // IDs of vertices that are part of the seam
+const J84_FACES_PIECE1_INDICES = [2, 4, 6, 8]; 
+const J84_FACES_PIECE2_INDICES = [0, 1, 5, 9]; 
+const J84_FACES_PIECE1_CAP_INDICES = [3, 7]; 
+const J84_FACES_PIECE2_CAP_INDICES = [10, 11]; 
+const SEAM_VERTEX_IDS = [0, 1, 2, 3]; 
 
-// --- Vector Math Utilities (not changed) ---
+// --- Vector Math Utilities ---
 function subtractVectors(v1, v2) { return [v1[0] - v2[0], v1[1] - v2[1], v1[2] - v2[2]]; }
 function addVectors(v1, v2) { return [v1[0] + v2[0], v1[1] + v2[1], v1[2] + v2[2]]; }
 function scaleVector(v, s) { return [v[0] * s, v[1] * s, v[2] * s]; }
@@ -198,7 +202,7 @@ function normalizeVector(v) {
     return [v[0]/len, v[1]/len, v[2]/len];
 }
 
-// --- Calculation Functions (not changed) ---
+// --- Calculation Functions ---
 function findQ() {
     const f = (x) => 2 * x**3 + 11 * x**2 + 4 * x - 1;
     const df = (x) => 6 * x**2 + 22 * x + 4;
@@ -213,9 +217,9 @@ function findQ() {
 }
 function calculateRST(q) {
     if (isNaN(q) || q <= 0) { return { r: NaN, s: NaN, t: NaN }; }
-    const r_val = Math.sqrt(q) / 2; const s_num = 1 - q; const s_den = 8 * q; // r is keyword
+    const r_val = Math.sqrt(q) / 2; const s_num = 1 - q; const s_den = 8 * q; 
     if (s_num < 0 || s_den <= 0) { return { r: r_val, s: NaN, t: NaN}; }
-    const s_val = Math.sqrt(s_num / s_den); const t_num = 1-q; // s is a keyword, use s_val
+    const s_val = Math.sqrt(s_num / s_den); const t_num = 1-q; 
     if(t_num < 0){ return { r: r_val, s: s_val, t: NaN}; }
     const t_val = Math.sqrt(t_num / 2); return { r: r_val, s: s_val, t: t_val };
 }
@@ -229,7 +233,7 @@ function getVertices(r, s, t) {
     ];
 }
 
-// --- Face Coloring Logic (not changed) ---
+// --- Face Coloring Logic ---
 const J84_FACES_INDICES = [
     [0,2,4], [0,4,3], [0,3,7], [0,7,6], [0,6,2], [1,5,2], [1,2,6], [1,6,7], [1,7,3], [1,3,5], [2,5,4], [3,4,5]
 ];
@@ -254,7 +258,7 @@ function computeFaceColors() {
     }
 }
 
-// --- Custom Camera Control Functions (not changed) ---
+// --- Custom Camera Control Functions ---
 function updateCameraPosition() {
     const x = cameraDistance * Math.sin(cameraPhi) * Math.cos(cameraTheta);
     const y = cameraDistance * Math.cos(cameraPhi);
@@ -264,17 +268,34 @@ function updateCameraPosition() {
     camera.position.add(cameraTarget).add(cameraPanOffset);
     camera.lookAt(cameraTarget.clone().add(cameraPanOffset));
 }
+
 function onMouseDown(event) {
     mouseDown = true;
     mouseButton = event.button;
     mouseX = event.clientX;
     mouseY = event.clientY;
     event.preventDefault();
+
+    if (mouseButton === 0) { 
+        isOrbiting = true;
+        if (!isPaused) { 
+            wasPausedBeforeOrbit = false; 
+            isPaused = true;              
+        } else {
+            wasPausedBeforeOrbit = true; 
+        }
+    }
 }
+
 function onMouseUp(event) {
+    if (isOrbiting && mouseButton === 0) {
+        isPaused = wasPausedBeforeOrbit;
+    }
+    isOrbiting = false; 
     mouseDown = false;
     event.preventDefault();
 }
+
 function onMouseMove(event) {
     if (!mouseDown) return;
     const deltaX = event.clientX - mouseX;
@@ -282,7 +303,7 @@ function onMouseMove(event) {
     if (mouseButton === 0) { 
         cameraTheta -= deltaX * 0.01;
         cameraPhi += deltaY * 0.01;
-        cameraPhi = Math.max(0.1, Math.min(Math.PI - 0.1, cameraPhi));
+        cameraPhi = Math.max(0.1, Math.min(Math.PI - 0.1, cameraPhi)); 
     } else if (mouseButton === 2) { 
         const panSpeed = 0.002;
         const right = new THREE.Vector3();
@@ -301,12 +322,12 @@ function onMouseMove(event) {
 function onMouseWheel(event) {
     const scale = event.deltaY > 0 ? 1.1 : 0.9;
     cameraDistance *= scale;
-    cameraDistance = Math.max(0.5, Math.min(10, cameraDistance));
+    cameraDistance = Math.max(0.5, Math.min(10, cameraDistance)); 
     updateCameraPosition();
     event.preventDefault();
 }
 
-// --- Piece Visuals Creation (not changed) ---
+// --- Piece Visuals Creation ---
 function createPieceVisualsGroup(pieceSpecificFaceIndices, allCenteredVertexPositions,
                                  globalJ84OriginalFaces, globalAssignedFaceColors) {
     const pieceSolidPositions = [], pieceSolidColors = [], pieceWireframePoints = [];
@@ -353,9 +374,8 @@ function performCalculationsAndSetupVisualization() {
     centeredVertexPositions = verticesObjects.map(v => v.coords); 
     centeredLabelData = verticesObjects.map(v => ({id:v.id, name: v.name, coords:v.coords}));
     
-    // Calculate coreAxisA: axis for core separation, from midpoint of (V6,V7) to midpoint of (V4,V5)
-    const m1_coords = scaleVector(addVectors(centeredVertexPositions[6], centeredVertexPositions[7]), 0.5); // Midpoint of V6,V7
-    const m2_coords = scaleVector(addVectors(centeredVertexPositions[4], centeredVertexPositions[5]), 0.5); // Midpoint of V4,V5
+    const m1_coords = scaleVector(addVectors(centeredVertexPositions[6], centeredVertexPositions[7]), 0.5); 
+    const m2_coords = scaleVector(addVectors(centeredVertexPositions[4], centeredVertexPositions[5]), 0.5); 
     const m1_vec = new THREE.Vector3().fromArray(m1_coords);
     const m2_vec = new THREE.Vector3().fromArray(m2_coords);
     coreAxisA.subVectors(m2_vec, m1_vec).normalize(); 
@@ -364,7 +384,7 @@ function performCalculationsAndSetupVisualization() {
     setupThreeJSVisualization();
 }
 
-// --- Three.js Setup (not significantly changed) ---
+// --- Three.js Setup ---
 function setupThreeJSVisualization() {
     const canvasContainer = document.getElementById('canvasContainer');
     while (canvasContainer.firstChild) canvasContainer.removeChild(canvasContainer.firstChild); 
@@ -430,8 +450,8 @@ function setupThreeJSVisualization() {
 
     piece1Group = createPieceVisualsGroup(J84_FACES_PIECE1_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors);
     piece2Group = createPieceVisualsGroup(J84_FACES_PIECE2_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors);
-    piece1CapGroup = createPieceVisualsGroup(J84_FACES_PIECE1_CAP_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors); // Cap for Piece 1 (V6,V7 side)
-    piece2CapGroup = createPieceVisualsGroup(J84_FACES_PIECE2_CAP_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors); // Cap for Piece 2 (V4,V5 side)
+    piece1CapGroup = createPieceVisualsGroup(J84_FACES_PIECE1_CAP_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors); 
+    piece2CapGroup = createPieceVisualsGroup(J84_FACES_PIECE2_CAP_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors); 
     
     modelGroup.add(piece1Group, piece2Group, piece1CapGroup, piece2CapGroup);
 
@@ -479,7 +499,7 @@ function setupThreeJSVisualization() {
     window.addEventListener('resize', onWindowResize, false);
 }
 
-// --- UI Update Function (not changed from fix1) ---
+// --- UI Update Function ---
 function updateShapeAndColorControls() {
     const piece1Solid = piece1Group.getObjectByName('solid');
     const piece2Solid = piece2Group.getObjectByName('solid');
@@ -520,7 +540,7 @@ function updateShapeAndColorControls() {
     if (piece1CapSolid) materialsToUpdate.push(piece1CapSolid.material);
     if (piece2CapSolid) materialsToUpdate.push(piece2CapSolid.material);
 
-    materialsToUpdate.forEach((mat) => { // Removed index as it was unused
+    materialsToUpdate.forEach((mat) => { 
         if (!mat) return; 
         let baseColor = 0x6082b6; 
 
@@ -561,7 +581,7 @@ function updateShapeAndColorControls() {
     }
 }
 
-// --- Window Resize (not changed) ---
+// --- Window Resize ---
 function onWindowResize() {
     if (!camera || !renderer) return;
     const c = document.getElementById('canvasContainer');
@@ -569,7 +589,7 @@ function onWindowResize() {
     renderer.setSize(c.clientWidth, c.clientHeight);
 }
 
-// --- Helper function to convert 3D position to 2D screen coordinates (not changed) ---
+// --- Helper function to convert 3D position to 2D screen coordinates ---
 function toScreenPosition(position, camera, renderer) {
     const vector = position.clone();
     vector.project(camera); 
@@ -582,19 +602,17 @@ function toScreenPosition(position, camera, renderer) {
 function animate() {
     animationId = requestAnimationFrame(animate);
     
-    // Model rotation
     if (!isPaused && modelGroup && !areCoresSeparatingAnimating && !areCapsSeparatingAnimating) {
         modelGroup.rotation.y += rotationSpeed * 0.7; 
     }
     
-    // Handle Core Separation Animation
     if (areCoresSeparatingAnimating) {
         coreSeparationLerpFactor += targetCoreSeparationState ? CORE_SEPARATION_ANIMATION_SPEED : -CORE_SEPARATION_ANIMATION_SPEED;
         coreSeparationLerpFactor = Math.max(0, Math.min(1, coreSeparationLerpFactor));
         
         const currentCoreSep = coreSeparationLerpFactor * MAX_CORE_SEPARATION_DISTANCE;
-        piece1Group.position.copy(coreAxisA).multiplyScalar(-currentCoreSep); // Piece 1 (V6,V7 side) moves along -coreAxisA
-        piece2Group.position.copy(coreAxisA).multiplyScalar(currentCoreSep);  // Piece 2 (V4,V5 side) moves along +coreAxisA
+        piece1Group.position.copy(coreAxisA).multiplyScalar(-currentCoreSep); 
+        piece2Group.position.copy(coreAxisA).multiplyScalar(currentCoreSep);  
 
         if ((targetCoreSeparationState && coreSeparationLerpFactor === 1) || (!targetCoreSeparationState && coreSeparationLerpFactor === 0)) {
             areCoresSeparatingAnimating = false; 
@@ -603,8 +621,7 @@ function animate() {
         }
     }
     
-    // --- MODIFIED: Handle Cap Separation Animation & Positioning ---
-    if (areCapsSeparatingAnimating) { // Update lerp factor for cap animation
+    if (areCapsSeparatingAnimating) { 
         capSeparationLerpFactor += targetCapSeparationState ? CAP_SEPARATION_ANIMATION_SPEED : -CAP_SEPARATION_ANIMATION_SPEED;
         capSeparationLerpFactor = Math.max(0, Math.min(1, capSeparationLerpFactor));
         if ((targetCapSeparationState && capSeparationLerpFactor === 1) || (!targetCapSeparationState && capSeparationLerpFactor === 0)) {
@@ -615,37 +632,20 @@ function animate() {
     }
     const currentCapEffectiveSep = capSeparationLerpFactor * MAX_CAP_SEPARATION_DISTANCE;
 
-    // Base positions for caps due to their own separation (relative to modelGroup origin)
-    // Piece 1 Cap (associated with V6,V7) moves along -coreAxisA.
-    // Piece 2 Cap (associated with V4,V5) moves along +coreAxisA.
     let p1CapFinalPos = coreAxisA.clone().multiplyScalar(-currentCapEffectiveSep);
     let p2CapFinalPos = coreAxisA.clone().multiplyScalar(currentCapEffectiveSep);
 
-    // If cores are also separated/separating, add the core's displacement to its associated cap.
-    // This ensures caps follow their respective core pieces.
     if (areCoresSeparated || areCoresSeparatingAnimating) {
         const currentCoreEffectiveSep = coreSeparationLerpFactor * MAX_CORE_SEPARATION_DISTANCE;
-        // Piece 1 Core moves by -coreAxisA * currentCoreEffectiveSep. Piece 1 Cap follows this.
         p1CapFinalPos.add(coreAxisA.clone().multiplyScalar(-currentCoreEffectiveSep));
-        // Piece 2 Core moves by +coreAxisA * currentCoreEffectiveSep. Piece 2 Cap follows this.
         p2CapFinalPos.add(coreAxisA.clone().multiplyScalar(currentCoreEffectiveSep));
     }
-    // If caps are joined (capSeparationLerpFactor is 0, so currentCapEffectiveSep is 0),
-    // and cores are also joined (coreSeparationLerpFactor is 0), then p1CapFinalPos and p2CapFinalPos will be (0,0,0).
-    // If caps are joined, but cores ARE separated, the above logic correctly sets
-    // p1CapFinalPos = 0 + (coreAxisA * -currentCoreEffectiveSep)
-    // p2CapFinalPos = 0 + (coreAxisA * +currentCoreEffectiveSep)
-    // making the joined caps follow their separated cores.
 
     piece1CapGroup.position.copy(p1CapFinalPos);
     piece2CapGroup.position.copy(p2CapFinalPos);
-    // --- END OF MODIFIED CAP POSITIONING ---
 
-
-    // Update matrices for accurate label positioning
     camera.updateMatrixWorld(true); 
     modelGroup.updateMatrixWorld(true); 
-    // Update world matrices of all children if they have been moved
     piece1Group.updateMatrixWorld(true);
     piece2Group.updateMatrixWorld(true);
     piece1CapGroup.updateMatrixWorld(true);
@@ -654,7 +654,6 @@ function animate() {
     const camWorldPos = new THREE.Vector3(); 
     camera.getWorldPosition(camWorldPos);
 
-    // --- Primary Labels (0-7) Update ---
     vertexLabels.forEach((labelObj, vertexId) => {
         if (!labelObj || !originalLabelPositions[vertexId]) return;
 
@@ -670,18 +669,15 @@ function animate() {
             let targetGroup;
             if (isCapVertex) {
                 targetGroup = (vertexId === 6 || vertexId === 7) ? piece1CapGroup : piece2CapGroup;
-            } else { // Core or seam vertex
+            } else { 
                 targetGroup = (pieceNumForVertex === 1) ? piece1Group : piece2Group;
             }
             activeOcclusionMesh = targetGroup.getObjectByName('solid');
-            // Vertex original position is local to modelGroup. Transform it by the piece's world matrix.
             finalVertexWorldPosition.copy(currentVertexModelSpacePos).applyMatrix4(targetGroup.matrixWorld);
         } else {
-            // Unified model, transform by modelGroup's world matrix
             finalVertexWorldPosition.copy(currentVertexModelSpacePos).applyMatrix4(modelGroup.matrixWorld);
         }
         
-        // Occlusion check
         if (showLabel && isSolidView && activeOcclusionMesh && activeOcclusionMesh.visible && activeOcclusionMesh.material.visible && raycaster) {
             const dir = new THREE.Vector3().subVectors(finalVertexWorldPosition, camWorldPos);
             const distToVertex = dir.length();
@@ -708,7 +704,6 @@ function animate() {
         }
     });
 
-    // --- Duplicate Seam Labels (0,1,2,3) Update ---
     SEAM_VERTEX_IDS.forEach(vertexId => {
         const dupLabelObj = duplicateSeamLabels[vertexId];
         if (!dupLabelObj || !originalDuplicateLabelPositions[vertexId]) return;
@@ -722,9 +717,9 @@ function animate() {
             
             let targetGroupDup;
             if (vertexId === 0 || vertexId === 1) { 
-                targetGroupDup = piece1Group; // Duplicate for V0,V1 appears on Piece 1
+                targetGroupDup = piece1Group; 
             } else { 
-                targetGroupDup = piece2Group; // Duplicate for V2,V3 appears on Piece 2
+                targetGroupDup = piece2Group; 
             }
             activeOcclusionMeshDup = targetGroupDup.getObjectByName('solid');
             finalDupVertexWorldPosition.copy(currentDupVertexModelSpacePos).applyMatrix4(targetGroupDup.matrixWorld);
@@ -761,8 +756,11 @@ function animate() {
     renderer.render(scene, camera);
 }
 
-// --- Event Listeners (not changed) ---
+// --- Event Listeners ---
 document.getElementById('pauseButton').addEventListener('click', () => { 
+    if (isOrbiting) {
+        wasPausedBeforeOrbit = true; 
+    }
     isPaused = !isPaused; 
     document.getElementById('pauseButton').textContent = isPaused ? 'Resume' : 'Pause'; 
 });
@@ -800,7 +798,7 @@ document.getElementById('separateCapsButton').addEventListener('click', () => {
     }
 });
 
-// --- Load and Unload (not changed) ---
+// --- Load and Unload ---
 window.onload = performCalculationsAndSetupVisualization;
 window.addEventListener('beforeunload', () => {
     if (animationId) cancelAnimationFrame(animationId);
