@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/renderers/CSS2DRenderer.js"></script>
+
+
 <style>
   body {
     font-family: 'Inter', sans-serif;
@@ -104,7 +104,8 @@
     <button id="toggleShapeButton">Show Solid</button>
     <button id="toggleLabelsButton">Hide Labels</button>
     <button id="toggleFaceColorsButton" disabled>Color Faces</button>
-    <button id="toggleSeparationButton">Separate Pieces</button>
+    <button id="separateCoresButton">Separate Cores</button>
+    <button id="separateCapsButton">Separate Caps</button>
   </div>
   <div id="canvasContainer">
     <!-- Three.js canvas and label renderer will be appended here -->
@@ -113,7 +114,7 @@
 
 <script>
 // --- Three.js related variables ---
-let scene, camera, renderer, labelRenderer, modelGroup, orbitControls;
+let scene, camera, renderer, modelGroup;
 let wireframeMesh, solidMesh, solidMaterial, solidEdgesMesh;
 let vertexLabels = []; // Primary labels (0-7)
 let duplicateSeamLabels = []; // Duplicate labels for seam vertices (0,1,2,3)
@@ -124,6 +125,16 @@ let isSolidView = false;
 let areLabelsVisible = true;
 let areFacesColored = false;
 let rotationSpeed = 0.005;
+
+// --- Custom Camera Controls ---
+let mouseDown = false;
+let mouseButton = 0; // 0 = left, 2 = right
+let mouseX = 0, mouseY = 0;
+let cameraDistance = 3;
+let cameraTheta = 0; // horizontal angle
+let cameraPhi = Math.PI / 4; // vertical angle  
+let cameraTarget = new THREE.Vector3(0, 0, 0);
+let cameraPanOffset = new THREE.Vector3(0, 0, 0);
 
 // --- Color definitions ---
 const J84_FACE_COLORS_PALETTE = [
@@ -141,25 +152,39 @@ let originalDuplicateLabelPositions = []; // For duplicate seam labels
 // --- Vertex to Piece Mapping for PRIMARY Label Following ---
 const vertexToPieceMap = {
   0: 2, 1: 2, 2: 1, 3: 1, // Seam vertices (V0,V1 follow piece2; V2,V3 follow piece1)
-  4: 2, 5: 2,             // Unique to piece 2
-  6: 1, 7: 1              // Unique to piece 1
+  4: 2, 5: 2,             // Unique to piece 2 (Cap 2)
+  6: 1, 7: 1              // Unique to piece 1 (Cap 1)
 };
 
-// --- Separation state variables ---
-let piece1Group, piece2Group;
-let isSeparated = false;
-let isSeparatingAnimating = false;
-let targetSeparationState = false;
-let separationLerpFactor = 0;
-const MAX_SEPARATION_DISTANCE = 1.05;
-const SEPARATION_ANIMATION_SPEED = 0.025;
-let axisA = new THREE.Vector3(0, 0, 1);
+// --- NEW INDEPENDENT SEPARATION STATE VARIABLES ---
+let piece1Group, piece2Group, piece1CapGroup, piece2CapGroup;
 
-const J84_FACES_PIECE1_INDICES = [2, 3, 4, 6, 7, 8];
-const J84_FACES_PIECE2_INDICES = [0, 1, 5, 9, 10, 11];
+// Core Separation State
+let areCoresSeparated = false;
+let areCoresSeparatingAnimating = false;
+let targetCoreSeparationState = false;
+let coreSeparationLerpFactor = 0;
+
+// Cap Separation State  
+let areCapsSeparated = false;
+let areCapsSeparatingAnimating = false;
+let targetCapSeparationState = false;
+let capSeparationLerpFactor = 0;
+
+// Constants
+const MAX_CORE_SEPARATION_DISTANCE = 1.05;
+const MAX_CAP_SEPARATION_DISTANCE = 1.2; // Adjusted from 2.5 back to a more reasonable value, can be tuned
+const CORE_SEPARATION_ANIMATION_SPEED = 0.025;
+const CAP_SEPARATION_ANIMATION_SPEED = 0.025;
+let coreAxisA = new THREE.Vector3(0, 0, 1); // Will be recalculated: axis from M(V6,V7) to M(V4,V5)
+
+const J84_FACES_PIECE1_INDICES = [2, 4, 6, 8]; // Core faces for piece 1
+const J84_FACES_PIECE2_INDICES = [0, 1, 5, 9]; // Core faces for piece 2
+const J84_FACES_PIECE1_CAP_INDICES = [3, 7]; // Cap faces for piece 1 - triangles sharing edge (V6,V7)
+const J84_FACES_PIECE2_CAP_INDICES = [10, 11]; // Cap faces for piece 2 - triangles sharing edge (V4,V5)
 const SEAM_VERTEX_IDS = [0, 1, 2, 3]; // IDs of vertices that are part of the seam
 
-// --- Vector Math Utilities ---
+// --- Vector Math Utilities (not changed) ---
 function subtractVectors(v1, v2) { return [v1[0] - v2[0], v1[1] - v2[1], v1[2] - v2[2]]; }
 function addVectors(v1, v2) { return [v1[0] + v2[0], v1[1] + v2[1], v1[2] + v2[2]]; }
 function scaleVector(v, s) { return [v[0] * s, v[1] * s, v[2] * s]; }
@@ -173,7 +198,7 @@ function normalizeVector(v) {
     return [v[0]/len, v[1]/len, v[2]/len];
 }
 
-// --- Calculation Functions ---
+// --- Calculation Functions (not changed) ---
 function findQ() {
     const f = (x) => 2 * x**3 + 11 * x**2 + 4 * x - 1;
     const df = (x) => 6 * x**2 + 22 * x + 4;
@@ -188,11 +213,11 @@ function findQ() {
 }
 function calculateRST(q) {
     if (isNaN(q) || q <= 0) { return { r: NaN, s: NaN, t: NaN }; }
-    const r = Math.sqrt(q) / 2; const s_num = 1 - q; const s_den = 8 * q;
-    if (s_num < 0 || s_den <= 0) { return { r, s: NaN, t: NaN}; }
-    const s = Math.sqrt(s_num / s_den); const t_num = 1-q;
-    if(t_num < 0){ return { r, s, t: NaN}; }
-    const t = Math.sqrt(t_num / 2); return { r, s, t };
+    const r_val = Math.sqrt(q) / 2; const s_num = 1 - q; const s_den = 8 * q; // r is keyword
+    if (s_num < 0 || s_den <= 0) { return { r: r_val, s: NaN, t: NaN}; }
+    const s_val = Math.sqrt(s_num / s_den); const t_num = 1-q; // s is a keyword, use s_val
+    if(t_num < 0){ return { r: r_val, s: s_val, t: NaN}; }
+    const t_val = Math.sqrt(t_num / 2); return { r: r_val, s: s_val, t: t_val };
 }
 function getVertices(r, s, t) {
     if (isNaN(r) || isNaN(s) || isNaN(t)) { return []; }
@@ -204,7 +229,7 @@ function getVertices(r, s, t) {
     ];
 }
 
-// --- Face Coloring Logic ---
+// --- Face Coloring Logic (not changed) ---
 const J84_FACES_INDICES = [
     [0,2,4], [0,4,3], [0,3,7], [0,7,6], [0,6,2], [1,5,2], [1,2,6], [1,6,7], [1,7,3], [1,3,5], [2,5,4], [3,4,5]
 ];
@@ -229,7 +254,59 @@ function computeFaceColors() {
     }
 }
 
-// --- Piece Creation Function ---
+// --- Custom Camera Control Functions (not changed) ---
+function updateCameraPosition() {
+    const x = cameraDistance * Math.sin(cameraPhi) * Math.cos(cameraTheta);
+    const y = cameraDistance * Math.cos(cameraPhi);
+    const z = cameraDistance * Math.sin(cameraPhi) * Math.sin(cameraTheta);
+    
+    camera.position.set(x, y, z);
+    camera.position.add(cameraTarget).add(cameraPanOffset);
+    camera.lookAt(cameraTarget.clone().add(cameraPanOffset));
+}
+function onMouseDown(event) {
+    mouseDown = true;
+    mouseButton = event.button;
+    mouseX = event.clientX;
+    mouseY = event.clientY;
+    event.preventDefault();
+}
+function onMouseUp(event) {
+    mouseDown = false;
+    event.preventDefault();
+}
+function onMouseMove(event) {
+    if (!mouseDown) return;
+    const deltaX = event.clientX - mouseX;
+    const deltaY = event.clientY - mouseY;
+    if (mouseButton === 0) { 
+        cameraTheta -= deltaX * 0.01;
+        cameraPhi += deltaY * 0.01;
+        cameraPhi = Math.max(0.1, Math.min(Math.PI - 0.1, cameraPhi));
+    } else if (mouseButton === 2) { 
+        const panSpeed = 0.002;
+        const right = new THREE.Vector3();
+        const up = new THREE.Vector3();
+        camera.getWorldDirection(new THREE.Vector3()); 
+        right.crossVectors(camera.up, new THREE.Vector3().subVectors(cameraTarget, camera.position).normalize());
+        up.crossVectors(new THREE.Vector3().subVectors(cameraTarget, camera.position).normalize(), right);
+        cameraPanOffset.add(right.multiplyScalar(-deltaX * panSpeed * cameraDistance));
+        cameraPanOffset.add(up.multiplyScalar(deltaY * panSpeed * cameraDistance));
+    }
+    updateCameraPosition();
+    mouseX = event.clientX;
+    mouseY = event.clientY;
+    event.preventDefault();
+}
+function onMouseWheel(event) {
+    const scale = event.deltaY > 0 ? 1.1 : 0.9;
+    cameraDistance *= scale;
+    cameraDistance = Math.max(0.5, Math.min(10, cameraDistance));
+    updateCameraPosition();
+    event.preventDefault();
+}
+
+// --- Piece Visuals Creation (not changed) ---
 function createPieceVisualsGroup(pieceSpecificFaceIndices, allCenteredVertexPositions,
                                  globalJ84OriginalFaces, globalAssignedFaceColors) {
     const pieceSolidPositions = [], pieceSolidColors = [], pieceWireframePoints = [];
@@ -254,7 +331,7 @@ function createPieceVisualsGroup(pieceSpecificFaceIndices, allCenteredVertexPosi
         color: 0x6082b6, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, side: THREE.DoubleSide
     });
     const pieceSolidMesh = new THREE.Mesh(pieceSolidGeom, pieceSolidMaterial); pieceSolidMesh.name = 'solid';
-    const pieceEdgesGeom = new THREE.EdgesGeometry(pieceSolidMesh.geometry, 15);
+    const pieceEdgesGeom = new THREE.EdgesGeometry(pieceSolidMesh.geometry, 15); 
     const pieceEdgeMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1.5 });
     const pieceEdgesMesh = new THREE.LineSegments(pieceEdgesGeom, pieceEdgeMaterial); pieceEdgesMesh.name = 'edges';
     const pieceWireframeGeom = new THREE.BufferGeometry();
@@ -263,67 +340,75 @@ function createPieceVisualsGroup(pieceSpecificFaceIndices, allCenteredVertexPosi
     const pieceWireframeMesh = new THREE.LineSegments(pieceWireframeGeom, pieceWireframeMaterial); pieceWireframeMesh.name = 'wireframe';
     const pieceGroup = new THREE.Group();
     pieceGroup.add(pieceSolidMesh, pieceEdgesMesh, pieceWireframeMesh);
-    [pieceSolidMesh, pieceEdgesMesh, pieceWireframeMesh, pieceGroup].forEach(o => o.visible = false);
+    [pieceSolidMesh, pieceEdgesMesh, pieceWireframeMesh, pieceGroup].forEach(o => o.visible = false); 
     return pieceGroup;
 }
 
 // --- Main Initialization ---
 function performCalculationsAndSetupVisualization() {
-    const q_val = findQ(); if (isNaN(q_val)) return;
-    const { r, s, t } = calculateRST(q_val); if (isNaN(r) || isNaN(s) || isNaN(t)) return;
-    const verticesObjects = getVertices(r, s, t); if (verticesObjects.length === 0) return;
-    centeredVertexPositions = verticesObjects.map(v => v.coords); // Assuming already centered
+    const q_val = findQ(); if (isNaN(q_val)) { console.error("Failed to calculate q."); return; }
+    const { r, s, t } = calculateRST(q_val); if (isNaN(r) || isNaN(s) || isNaN(t)) { console.error("Failed to calculate r, s, or t."); return; }
+    const verticesObjects = getVertices(r, s, t); if (verticesObjects.length === 0) { console.error("Failed to get vertices."); return; }
+    
+    centeredVertexPositions = verticesObjects.map(v => v.coords); 
     centeredLabelData = verticesObjects.map(v => ({id:v.id, name: v.name, coords:v.coords}));
+    
+    // Calculate coreAxisA: axis for core separation, from midpoint of (V6,V7) to midpoint of (V4,V5)
+    const m1_coords = scaleVector(addVectors(centeredVertexPositions[6], centeredVertexPositions[7]), 0.5); // Midpoint of V6,V7
+    const m2_coords = scaleVector(addVectors(centeredVertexPositions[4], centeredVertexPositions[5]), 0.5); // Midpoint of V4,V5
+    const m1_vec = new THREE.Vector3().fromArray(m1_coords);
+    const m2_vec = new THREE.Vector3().fromArray(m2_coords);
+    coreAxisA.subVectors(m2_vec, m1_vec).normalize(); 
+
     computeFaceColors();
-    const m1 = new THREE.Vector3().fromArray(scaleVector(addVectors(centeredVertexPositions[6], centeredVertexPositions[7]), 0.5));
-    const m2 = new THREE.Vector3().fromArray(scaleVector(addVectors(centeredVertexPositions[4], centeredVertexPositions[5]), 0.5));
-    axisA.subVectors(m2, m1).normalize();
     setupThreeJSVisualization();
 }
 
-// --- Three.js Setup ---
+// --- Three.js Setup (not significantly changed) ---
 function setupThreeJSVisualization() {
     const canvasContainer = document.getElementById('canvasContainer');
-    while (canvasContainer.firstChild) canvasContainer.removeChild(canvasContainer.firstChild);
+    while (canvasContainer.firstChild) canvasContainer.removeChild(canvasContainer.firstChild); 
     if (animationId) cancelAnimationFrame(animationId);
 
     scene = new THREE.Scene(); raycaster = new THREE.Raycaster();
     camera = new THREE.PerspectiveCamera(75, canvasContainer.clientWidth / canvasContainer.clientHeight, 0.1, 1000);
-    camera.position.set(1.2, 1.2, 2.2);
+        
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
     canvasContainer.appendChild(renderer.domElement);
-    labelRenderer = new THREE.CSS2DRenderer();
-    labelRenderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
-    labelRenderer.domElement.style.position = 'absolute'; labelRenderer.domElement.style.top = '0px';
-    labelRenderer.domElement.style.pointerEvents = 'none';
-    canvasContainer.appendChild(labelRenderer.domElement);
-    orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
-    orbitControls.enableDamping = true; orbitControls.dampingFactor = 0.05;
+        
+    renderer.domElement.addEventListener('mousedown', onMouseDown, false);
+    renderer.domElement.addEventListener('mouseup', onMouseUp, false);
+    renderer.domElement.addEventListener('mousemove', onMouseMove, false);
+    renderer.domElement.addEventListener('wheel', onMouseWheel, false);
+    renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault(), false);
     
-    // Lights - Corrected
+    updateCameraPosition(); 
+    
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
     scene.add(ambientLight);
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-    dirLight.position.set(1.5, 2, 1); // Set position of the light
-    scene.add(dirLight); // Add the light object itself
+    dirLight.position.set(1.5, 2, 1); 
+    scene.add(dirLight);
 
     modelGroup = new THREE.Group(); scene.add(modelGroup);
 
-    // Combined wireframe
     const wfPoints = [];
     for (let i=0; i<centeredVertexPositions.length; i++) {
         for (let j=i+1; j<centeredVertexPositions.length; j++) {
-            const dSq = (centeredVertexPositions[i][0]-centeredVertexPositions[j][0])**2 + (centeredVertexPositions[i][1]-centeredVertexPositions[j][1])**2 + (centeredVertexPositions[i][2]-centeredVertexPositions[j][2])**2;
-            if (Math.abs(dSq - 1.0) < 1e-5) wfPoints.push(...centeredVertexPositions[i], ...centeredVertexPositions[j]);
+            const dSq = (centeredVertexPositions[i][0]-centeredVertexPositions[j][0])**2 + 
+                        (centeredVertexPositions[i][1]-centeredVertexPositions[j][1])**2 + 
+                        (centeredVertexPositions[i][2]-centeredVertexPositions[j][2])**2;
+            if (Math.abs(dSq - 1.0) < 1e-5) { 
+                wfPoints.push(...centeredVertexPositions[i], ...centeredVertexPositions[j]);
+            }
         }
     }
     const wfGeom = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(wfPoints, 3));
     wireframeMesh = new THREE.LineSegments(wfGeom, new THREE.LineBasicMaterial({ color: 0x00dd00, linewidth: 2 }));
     modelGroup.add(wireframeMesh);
 
-    // Combined solid
     const solidPos = [], solidColors = [];
     J84_FACES_INDICES.forEach((faceVIds, fIdx) => faceVIds.forEach(vId => {
         solidPos.push(...centeredVertexPositions[vId]);
@@ -333,187 +418,414 @@ function setupThreeJSVisualization() {
     solidGeom.setAttribute('position', new THREE.Float32BufferAttribute(solidPos, 3));
     solidGeom.setAttribute('color', new THREE.Float32BufferAttribute(solidColors, 3));
     solidGeom.computeVertexNormals();
-    solidMaterial = new THREE.MeshPhongMaterial({ shininess: 80, specular: 0x222222, flatShading: true, vertexColors: false, color: 0x6082b6, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, side: THREE.FrontSide });
+    solidMaterial = new THREE.MeshPhongMaterial({ 
+        shininess: 80, specular: 0x222222, flatShading: true, 
+        vertexColors: false, color: 0x6082b6, 
+        polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, 
+        side: THREE.FrontSide 
+    });
     solidMesh = new THREE.Mesh(solidGeom, solidMaterial); modelGroup.add(solidMesh);
     solidEdgesMesh = new THREE.LineSegments(new THREE.EdgesGeometry(solidMesh.geometry, 1), new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1.5 }));
     modelGroup.add(solidEdgesMesh);
 
     piece1Group = createPieceVisualsGroup(J84_FACES_PIECE1_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors);
     piece2Group = createPieceVisualsGroup(J84_FACES_PIECE2_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors);
-    modelGroup.add(piece1Group, piece2Group);
+    piece1CapGroup = createPieceVisualsGroup(J84_FACES_PIECE1_CAP_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors); // Cap for Piece 1 (V6,V7 side)
+    piece2CapGroup = createPieceVisualsGroup(J84_FACES_PIECE2_CAP_INDICES, centeredVertexPositions, J84_FACES_INDICES, assignedFaceColors); // Cap for Piece 2 (V4,V5 side)
+    
+    modelGroup.add(piece1Group, piece2Group, piece1CapGroup, piece2CapGroup);
 
-    // Create Primary Labels (0-7)
     vertexLabels = []; originalLabelPositions = [];
     centeredLabelData.forEach(vertex => {
-        const labelDiv = document.createElement('div'); labelDiv.className = 'vertex-label'; labelDiv.textContent = vertex.id;
-        const label = new THREE.CSS2DObject(labelDiv);
+        const labelDiv = document.createElement('div'); 
+        labelDiv.className = 'vertex-label'; 
+        labelDiv.textContent = vertex.id;
+        labelDiv.style.position = 'absolute';
+        labelDiv.style.zIndex = '1000'; 
+        canvasContainer.appendChild(labelDiv);
+        
         const posVec = new THREE.Vector3().fromArray(vertex.coords);
-        label.position.copy(posVec);
         originalLabelPositions[vertex.id] = posVec.clone();
-        modelGroup.add(label); vertexLabels[vertex.id] = label;
+        vertexLabels[vertex.id] = {
+            element: labelDiv,
+            position: posVec.clone() 
+        };
     });
 
-    // Create Duplicate Labels for Seam Vertices (0,1,2,3)
     duplicateSeamLabels = []; originalDuplicateLabelPositions = [];
     SEAM_VERTEX_IDS.forEach(vertexId => {
         const originalVertexData = centeredLabelData.find(v => v.id === vertexId);
         if (originalVertexData) {
-            const dupLabelDiv = document.createElement('div'); dupLabelDiv.className = 'vertex-label'; dupLabelDiv.textContent = vertexId;
-            const dupLabel = new THREE.CSS2DObject(dupLabelDiv);
+            const dupLabelDiv = document.createElement('div'); 
+            dupLabelDiv.className = 'vertex-label'; 
+            dupLabelDiv.textContent = vertexId; 
+            dupLabelDiv.style.position = 'absolute';
+            dupLabelDiv.style.zIndex = '1000';
+            dupLabelDiv.style.display = 'none'; 
+            canvasContainer.appendChild(dupLabelDiv);
+            
             const posVec = new THREE.Vector3().fromArray(originalVertexData.coords);
-            dupLabel.position.copy(posVec); // Initial position same as original
             originalDuplicateLabelPositions[vertexId] = posVec.clone();
-            dupLabel.visible = false; // Initially hidden
-            modelGroup.add(dupLabel);
-            duplicateSeamLabels[vertexId] = dupLabel;
+            duplicateSeamLabels[vertexId] = {
+                element: dupLabelDiv,
+                position: posVec.clone()
+            };
         }
     });
 
-    updateShapeAndColorControls();
+    updateShapeAndColorControls(); 
     rotationSpeed = parseFloat(document.getElementById('speedSlider').value) / 2000;
     animate();
     window.addEventListener('resize', onWindowResize, false);
 }
 
-// --- UI Update Function ---
+// --- UI Update Function (not changed from fix1) ---
 function updateShapeAndColorControls() {
-    const piece1Solid = piece1Group.getObjectByName('solid'), piece2Solid = piece2Group.getObjectByName('solid');
-    wireframeMesh.visible = !isSolidView && !isSeparated && !isSeparatingAnimating;
-    solidMesh.visible = isSolidView && !isSeparated && !isSeparatingAnimating;
-    solidEdgesMesh.visible = isSolidView && !isSeparated && !isSeparatingAnimating;
-    piece1Group.visible = isSeparated || isSeparatingAnimating;
-    piece2Group.visible = isSeparated || isSeparatingAnimating;
-    if (isSeparated || isSeparatingAnimating) {
-        piece1Group.getObjectByName('solid').visible = isSolidView;
-        piece1Group.getObjectByName('edges').visible = isSolidView;
-        piece1Group.getObjectByName('wireframe').visible = !isSolidView;
-        piece2Group.getObjectByName('solid').visible = isSolidView;
-        piece2Group.getObjectByName('edges').visible = isSolidView;
-        piece2Group.getObjectByName('wireframe').visible = !isSolidView;
+    const piece1Solid = piece1Group.getObjectByName('solid');
+    const piece2Solid = piece2Group.getObjectByName('solid');
+    const piece1CapSolid = piece1CapGroup.getObjectByName('solid');
+    const piece2CapSolid = piece2CapGroup.getObjectByName('solid');
+    
+    const showUnifiedModel = !areCoresSeparated && !areCoresSeparatingAnimating && 
+                             !areCapsSeparated && !areCapsSeparatingAnimating;
+
+    wireframeMesh.visible = !isSolidView && showUnifiedModel;
+    solidMesh.visible = isSolidView && showUnifiedModel;
+    solidEdgesMesh.visible = isSolidView && showUnifiedModel;
+    
+    const showPieces = areCoresSeparated || areCoresSeparatingAnimating || 
+                       areCapsSeparated || areCapsSeparatingAnimating;
+    
+    piece1Group.visible = showPieces;
+    piece2Group.visible = showPieces;
+    piece1CapGroup.visible = showPieces;
+    piece2CapGroup.visible = showPieces;
+    
+    if (showPieces) {
+        [piece1Group, piece2Group, piece1CapGroup, piece2CapGroup].forEach(group => {
+            if (group) { 
+                const sMesh = group.getObjectByName('solid');
+                const eMesh = group.getObjectByName('edges');
+                const wMesh = group.getObjectByName('wireframe');
+                if(sMesh) sMesh.visible = isSolidView;
+                if(eMesh) eMesh.visible = isSolidView; 
+                if(wMesh) wMesh.visible = !isSolidView;
+            }
+        });
     }
-    [solidMaterial, piece1Solid.material, piece2Solid.material].forEach(mat => {
-        let baseColor = (mat === piece2Solid.material && (isSeparated || isSeparatingAnimating) && !areFacesColored) ? 0xff8c00 : 0x6082b6;
-        mat.vertexColors = areFacesColored;
-        mat.color.set(areFacesColored ? 0xffffff : baseColor);
+    
+    const materialsToUpdate = [solidMaterial];
+    if (piece1Solid) materialsToUpdate.push(piece1Solid.material);
+    if (piece2Solid) materialsToUpdate.push(piece2Solid.material);
+    if (piece1CapSolid) materialsToUpdate.push(piece1CapSolid.material);
+    if (piece2CapSolid) materialsToUpdate.push(piece2CapSolid.material);
+
+    materialsToUpdate.forEach((mat) => { // Removed index as it was unused
+        if (!mat) return; 
+        let baseColor = 0x6082b6; 
+
+        if (!areFacesColored) {
+            if (piece2Solid && mat === piece2Solid.material) { 
+                baseColor = 0xff8c00; 
+            } else if (piece1CapSolid && mat === piece1CapSolid.material) { 
+                baseColor = 0x32cd32; 
+            } else if (piece2CapSolid && mat === piece2CapSolid.material) { 
+                baseColor = 0xff6347; 
+            }
+        }
+        
+        mat.vertexColors = areFacesColored; 
+        mat.color.set(areFacesColored ? 0xffffff : baseColor); 
         mat.shininess = areFacesColored ? 10 : 80;
         mat.specular.set(areFacesColored ? 0x111111 : 0x222222);
         mat.needsUpdate = true;
     });
+    
     document.getElementById('toggleShapeButton').textContent = isSolidView ? 'Show Wireframe' : 'Show Solid';
     document.getElementById('toggleFaceColorsButton').disabled = !isSolidView;
     document.getElementById('toggleFaceColorsButton').textContent = areFacesColored ? 'Monochrome' : 'Color Faces';
     document.getElementById('toggleLabelsButton').textContent = areLabelsVisible ? 'Hide Labels' : 'Show Labels';
-    document.getElementById('toggleSeparationButton').textContent = (isSeparated || (isSeparatingAnimating && targetSeparationState)) ? 'Join Pieces' : 'Separate Pieces';
+    
+    const separateCoresButton = document.getElementById('separateCoresButton');
+    if (areCoresSeparatingAnimating) {
+        separateCoresButton.textContent = targetCoreSeparationState ? 'Separating Cores...' : 'Joining Cores...';
+    } else {
+        separateCoresButton.textContent = areCoresSeparated ? 'Join Cores' : 'Separate Cores';
+    }
+
+    const separateCapsButton = document.getElementById('separateCapsButton');
+    if (areCapsSeparatingAnimating) {
+        separateCapsButton.textContent = targetCapSeparationState ? 'Separating Caps...' : 'Joining Caps...';
+    } else {
+        separateCapsButton.textContent = areCapsSeparated ? 'Join Caps' : 'Separate Caps';
+    }
 }
 
-// --- Window Resize ---
+// --- Window Resize (not changed) ---
 function onWindowResize() {
-    if (!camera || !renderer || !labelRenderer) return;
+    if (!camera || !renderer) return;
     const c = document.getElementById('canvasContainer');
     camera.aspect = c.clientWidth / c.clientHeight; camera.updateProjectionMatrix();
-    renderer.setSize(c.clientWidth, c.clientHeight); labelRenderer.setSize(c.clientWidth, c.clientHeight);
+    renderer.setSize(c.clientWidth, c.clientHeight);
+}
+
+// --- Helper function to convert 3D position to 2D screen coordinates (not changed) ---
+function toScreenPosition(position, camera, renderer) {
+    const vector = position.clone();
+    vector.project(camera); 
+    const x = (vector.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
+    const y = (vector.y * -0.5 + 0.5) * renderer.domElement.clientHeight; 
+    return { x, y, z: vector.z }; 
 }
 
 // --- Animation Loop ---
 function animate() {
     animationId = requestAnimationFrame(animate);
-    orbitControls.update();
-    if (!isPaused && modelGroup && !isSeparatingAnimating) {
-        modelGroup.rotation.y += rotationSpeed * 0.7; // Simplified rotation
+    
+    // Model rotation
+    if (!isPaused && modelGroup && !areCoresSeparatingAnimating && !areCapsSeparatingAnimating) {
+        modelGroup.rotation.y += rotationSpeed * 0.7; 
     }
-    if (isSeparatingAnimating) {
-        separationLerpFactor += targetSeparationState ? SEPARATION_ANIMATION_SPEED : -SEPARATION_ANIMATION_SPEED;
-        separationLerpFactor = Math.max(0, Math.min(1, separationLerpFactor));
-        if ((targetSeparationState && separationLerpFactor === 1) || (!targetSeparationState && separationLerpFactor === 0)) {
-            isSeparatingAnimating = false; isSeparated = targetSeparationState;
-            updateShapeAndColorControls();
-        }
-        const currentSep = separationLerpFactor * MAX_SEPARATION_DISTANCE;
-        piece1Group.position.copy(axisA).multiplyScalar(-currentSep);
-        piece2Group.position.copy(axisA).multiplyScalar(currentSep);
-    }
-    camera.updateMatrixWorld(true); modelGroup.updateMatrixWorld(true);
-    const camWorldPos = new THREE.Vector3(); camera.getWorldPosition(camWorldPos);
+    
+    // Handle Core Separation Animation
+    if (areCoresSeparatingAnimating) {
+        coreSeparationLerpFactor += targetCoreSeparationState ? CORE_SEPARATION_ANIMATION_SPEED : -CORE_SEPARATION_ANIMATION_SPEED;
+        coreSeparationLerpFactor = Math.max(0, Math.min(1, coreSeparationLerpFactor));
+        
+        const currentCoreSep = coreSeparationLerpFactor * MAX_CORE_SEPARATION_DISTANCE;
+        piece1Group.position.copy(coreAxisA).multiplyScalar(-currentCoreSep); // Piece 1 (V6,V7 side) moves along -coreAxisA
+        piece2Group.position.copy(coreAxisA).multiplyScalar(currentCoreSep);  // Piece 2 (V4,V5 side) moves along +coreAxisA
 
-    // Handle Primary Labels (0-7)
-    vertexLabels.forEach((label, vertexId) => {
-        if (!label || !originalLabelPositions[vertexId]) return;
-        let finalPos = new THREE.Vector3();
-        let show = areLabelsVisible;
-        let occlusionMesh = solidMesh;
-        if (isSeparated || isSeparatingAnimating) {
-            const pieceNum = vertexToPieceMap[vertexId];
-            const targetGroup = (pieceNum === 1) ? piece1Group : piece2Group;
-            if (targetGroup) {
-                finalPos.copy(originalLabelPositions[vertexId]).add(targetGroup.position);
-                occlusionMesh = targetGroup.getObjectByName('solid');
-            } else { finalPos.copy(originalLabelPositions[vertexId]); }
+        if ((targetCoreSeparationState && coreSeparationLerpFactor === 1) || (!targetCoreSeparationState && coreSeparationLerpFactor === 0)) {
+            areCoresSeparatingAnimating = false; 
+            areCoresSeparated = targetCoreSeparationState;
+            updateShapeAndColorControls(); 
+        }
+    }
+    
+    // --- MODIFIED: Handle Cap Separation Animation & Positioning ---
+    if (areCapsSeparatingAnimating) { // Update lerp factor for cap animation
+        capSeparationLerpFactor += targetCapSeparationState ? CAP_SEPARATION_ANIMATION_SPEED : -CAP_SEPARATION_ANIMATION_SPEED;
+        capSeparationLerpFactor = Math.max(0, Math.min(1, capSeparationLerpFactor));
+        if ((targetCapSeparationState && capSeparationLerpFactor === 1) || (!targetCapSeparationState && capSeparationLerpFactor === 0)) {
+            areCapsSeparatingAnimating = false; 
+            areCapsSeparated = targetCapSeparationState;
+            updateShapeAndColorControls(); 
+        }
+    }
+    const currentCapEffectiveSep = capSeparationLerpFactor * MAX_CAP_SEPARATION_DISTANCE;
+
+    // Base positions for caps due to their own separation (relative to modelGroup origin)
+    // Piece 1 Cap (associated with V6,V7) moves along -coreAxisA.
+    // Piece 2 Cap (associated with V4,V5) moves along +coreAxisA.
+    let p1CapFinalPos = coreAxisA.clone().multiplyScalar(-currentCapEffectiveSep);
+    let p2CapFinalPos = coreAxisA.clone().multiplyScalar(currentCapEffectiveSep);
+
+    // If cores are also separated/separating, add the core's displacement to its associated cap.
+    // This ensures caps follow their respective core pieces.
+    if (areCoresSeparated || areCoresSeparatingAnimating) {
+        const currentCoreEffectiveSep = coreSeparationLerpFactor * MAX_CORE_SEPARATION_DISTANCE;
+        // Piece 1 Core moves by -coreAxisA * currentCoreEffectiveSep. Piece 1 Cap follows this.
+        p1CapFinalPos.add(coreAxisA.clone().multiplyScalar(-currentCoreEffectiveSep));
+        // Piece 2 Core moves by +coreAxisA * currentCoreEffectiveSep. Piece 2 Cap follows this.
+        p2CapFinalPos.add(coreAxisA.clone().multiplyScalar(currentCoreEffectiveSep));
+    }
+    // If caps are joined (capSeparationLerpFactor is 0, so currentCapEffectiveSep is 0),
+    // and cores are also joined (coreSeparationLerpFactor is 0), then p1CapFinalPos and p2CapFinalPos will be (0,0,0).
+    // If caps are joined, but cores ARE separated, the above logic correctly sets
+    // p1CapFinalPos = 0 + (coreAxisA * -currentCoreEffectiveSep)
+    // p2CapFinalPos = 0 + (coreAxisA * +currentCoreEffectiveSep)
+    // making the joined caps follow their separated cores.
+
+    piece1CapGroup.position.copy(p1CapFinalPos);
+    piece2CapGroup.position.copy(p2CapFinalPos);
+    // --- END OF MODIFIED CAP POSITIONING ---
+
+
+    // Update matrices for accurate label positioning
+    camera.updateMatrixWorld(true); 
+    modelGroup.updateMatrixWorld(true); 
+    // Update world matrices of all children if they have been moved
+    piece1Group.updateMatrixWorld(true);
+    piece2Group.updateMatrixWorld(true);
+    piece1CapGroup.updateMatrixWorld(true);
+    piece2CapGroup.updateMatrixWorld(true);
+
+    const camWorldPos = new THREE.Vector3(); 
+    camera.getWorldPosition(camWorldPos);
+
+    // --- Primary Labels (0-7) Update ---
+    vertexLabels.forEach((labelObj, vertexId) => {
+        if (!labelObj || !originalLabelPositions[vertexId]) return;
+
+        let currentVertexModelSpacePos = new THREE.Vector3().copy(originalLabelPositions[vertexId]);
+        let showLabel = areLabelsVisible;
+        let activeOcclusionMesh = solidMesh; 
+        let finalVertexWorldPosition = new THREE.Vector3();
+
+        if (areCoresSeparated || areCoresSeparatingAnimating || areCapsSeparated || areCapsSeparatingAnimating) {
+            const pieceNumForVertex = vertexToPieceMap[vertexId]; 
+            let isCapVertex = (vertexId === 4 || vertexId === 5 || vertexId === 6 || vertexId === 7);
+            
+            let targetGroup;
+            if (isCapVertex) {
+                targetGroup = (vertexId === 6 || vertexId === 7) ? piece1CapGroup : piece2CapGroup;
+            } else { // Core or seam vertex
+                targetGroup = (pieceNumForVertex === 1) ? piece1Group : piece2Group;
+            }
+            activeOcclusionMesh = targetGroup.getObjectByName('solid');
+            // Vertex original position is local to modelGroup. Transform it by the piece's world matrix.
+            finalVertexWorldPosition.copy(currentVertexModelSpacePos).applyMatrix4(targetGroup.matrixWorld);
         } else {
-            finalPos.copy(originalLabelPositions[vertexId]);
+            // Unified model, transform by modelGroup's world matrix
+            finalVertexWorldPosition.copy(currentVertexModelSpacePos).applyMatrix4(modelGroup.matrixWorld);
         }
-        label.position.copy(finalPos);
-        label.visible = show;
-        if (show && isSolidView && occlusionMesh && occlusionMesh.visible && raycaster) {
-            const lblWorldPos = new THREE.Vector3().copy(label.position).applyMatrix4(modelGroup.matrixWorld);
-            const dir = new THREE.Vector3().subVectors(lblWorldPos, camWorldPos);
-            const dist = dir.length();
-            if (dist > 1e-5) {
+        
+        // Occlusion check
+        if (showLabel && isSolidView && activeOcclusionMesh && activeOcclusionMesh.visible && activeOcclusionMesh.material.visible && raycaster) {
+            const dir = new THREE.Vector3().subVectors(finalVertexWorldPosition, camWorldPos);
+            const distToVertex = dir.length();
+            if (distToVertex > 1e-5) { 
                 raycaster.set(camWorldPos, dir.normalize());
-                const intersects = raycaster.intersectObject(occlusionMesh, false);
-                if (intersects.length > 0 && intersects[0].distance < dist - 0.05) label.visible = false;
-            }
-        }
-    });
-
-    // Handle Duplicate Seam Labels (0,1,2,3)
-    SEAM_VERTEX_IDS.forEach(vertexId => {
-        const dupLabel = duplicateSeamLabels[vertexId];
-        if (!dupLabel || !originalDuplicateLabelPositions[vertexId]) return;
-        let showDuplicate = areLabelsVisible && (isSeparated || isSeparatingAnimating);
-        dupLabel.visible = showDuplicate;
-        if (showDuplicate) {
-            let finalDupPos = new THREE.Vector3();
-            let occlusionMeshDup;
-            // V0, V1 duplicates follow Piece 1 (V6,V7 shell)
-            // V2, V3 duplicates follow Piece 2 (V4,V5 shell)
-            if (vertexId === 0 || vertexId === 1) { // These duplicates go with piece1
-                finalDupPos.copy(originalDuplicateLabelPositions[vertexId]).add(piece1Group.position);
-                occlusionMeshDup = piece1Group.getObjectByName('solid');
-            } else { // vertexId is 2 or 3, these duplicates go with piece2
-                finalDupPos.copy(originalDuplicateLabelPositions[vertexId]).add(piece2Group.position);
-                occlusionMeshDup = piece2Group.getObjectByName('solid');
-            }
-            dupLabel.position.copy(finalDupPos);
-            if (isSolidView && occlusionMeshDup && occlusionMeshDup.visible && raycaster) {
-                const lblWorldPos = new THREE.Vector3().copy(dupLabel.position).applyMatrix4(modelGroup.matrixWorld);
-                const dir = new THREE.Vector3().subVectors(lblWorldPos, camWorldPos);
-                const dist = dir.length();
-                if (dist > 1e-5) {
-                    raycaster.set(camWorldPos, dir.normalize());
-                    const intersects = raycaster.intersectObject(occlusionMeshDup, false);
-                    if (intersects.length > 0 && intersects[0].distance < dist - 0.05) dupLabel.visible = false;
+                const intersects = raycaster.intersectObject(activeOcclusionMesh, false); 
+                if (intersects.length > 0 && intersects[0].distance < distToVertex - 0.05) { 
+                    showLabel = false;
                 }
             }
         }
+        
+        if (showLabel) {
+            const screenPos = toScreenPosition(finalVertexWorldPosition, camera, renderer);
+            if (screenPos.z < 1) { 
+                labelObj.element.style.display = 'block';
+                labelObj.element.style.left = `${screenPos.x - labelObj.element.offsetWidth / 2}px`; 
+                labelObj.element.style.top = `${screenPos.y - labelObj.element.offsetHeight / 2}px`; 
+            } else {
+                labelObj.element.style.display = 'none';
+            }
+        } else {
+            labelObj.element.style.display = 'none';
+        }
     });
 
-    renderer.render(scene, camera); labelRenderer.render(scene, camera);
+    // --- Duplicate Seam Labels (0,1,2,3) Update ---
+    SEAM_VERTEX_IDS.forEach(vertexId => {
+        const dupLabelObj = duplicateSeamLabels[vertexId];
+        if (!dupLabelObj || !originalDuplicateLabelPositions[vertexId]) return;
+        
+        let showDuplicate = areLabelsVisible && (areCoresSeparated || areCoresSeparatingAnimating);
+        
+        if (showDuplicate) {
+            let currentDupVertexModelSpacePos = new THREE.Vector3().copy(originalDuplicateLabelPositions[vertexId]);
+            let finalDupVertexWorldPosition = new THREE.Vector3();
+            let activeOcclusionMeshDup;
+            
+            let targetGroupDup;
+            if (vertexId === 0 || vertexId === 1) { 
+                targetGroupDup = piece1Group; // Duplicate for V0,V1 appears on Piece 1
+            } else { 
+                targetGroupDup = piece2Group; // Duplicate for V2,V3 appears on Piece 2
+            }
+            activeOcclusionMeshDup = targetGroupDup.getObjectByName('solid');
+            finalDupVertexWorldPosition.copy(currentDupVertexModelSpacePos).applyMatrix4(targetGroupDup.matrixWorld);
+            
+            if (isSolidView && activeOcclusionMeshDup && activeOcclusionMeshDup.visible && activeOcclusionMeshDup.material.visible && raycaster) {
+                const dir = new THREE.Vector3().subVectors(finalDupVertexWorldPosition, camWorldPos);
+                const distToVertex = dir.length();
+                if (distToVertex > 1e-5) {
+                    raycaster.set(camWorldPos, dir.normalize());
+                    const intersects = raycaster.intersectObject(activeOcclusionMeshDup, false);
+                    if (intersects.length > 0 && intersects[0].distance < distToVertex - 0.05) {
+                        showDuplicate = false;
+                    }
+                }
+            }
+            
+            if (showDuplicate) {
+                const screenPos = toScreenPosition(finalDupVertexWorldPosition, camera, renderer);
+                if (screenPos.z < 1) {
+                    dupLabelObj.element.style.display = 'block';
+                    dupLabelObj.element.style.left = `${screenPos.x - dupLabelObj.element.offsetWidth / 2}px`;
+                    dupLabelObj.element.style.top = `${screenPos.y - dupLabelObj.element.offsetHeight / 2}px`;
+                } else {
+                    dupLabelObj.element.style.display = 'none';
+                }
+            } else {
+                dupLabelObj.element.style.display = 'none';
+            }
+        } else {
+            dupLabelObj.element.style.display = 'none';
+        }
+    });
+
+    renderer.render(scene, camera);
 }
 
-// --- Event Listeners ---
-document.getElementById('pauseButton').addEventListener('click', () => { isPaused = !isPaused; document.getElementById('pauseButton').textContent = isPaused ? 'Resume' : 'Pause'; });
-document.getElementById('speedSlider').addEventListener('input', (e) => { rotationSpeed = parseFloat(e.target.value) / 2000; });
-document.getElementById('toggleShapeButton').addEventListener('click', () => { isSolidView = !isSolidView; updateShapeAndColorControls(); });
-document.getElementById('toggleLabelsButton').addEventListener('click', () => { areLabelsVisible = !areLabelsVisible; updateShapeAndColorControls(); }); // updateShapeAndColorControls also updates button text
-document.getElementById('toggleFaceColorsButton').addEventListener('click', () => { if(isSolidView) { areFacesColored = !areFacesColored; updateShapeAndColorControls(); }});
-document.getElementById('toggleSeparationButton').addEventListener('click', () => { if (!isSeparatingAnimating) { targetSeparationState = !isSeparated; isSeparatingAnimating = true; updateShapeAndColorControls(); }});
+// --- Event Listeners (not changed) ---
+document.getElementById('pauseButton').addEventListener('click', () => { 
+    isPaused = !isPaused; 
+    document.getElementById('pauseButton').textContent = isPaused ? 'Resume' : 'Pause'; 
+});
+document.getElementById('speedSlider').addEventListener('input', (e) => { 
+    rotationSpeed = parseFloat(e.target.value) / 2000; 
+});
+document.getElementById('toggleShapeButton').addEventListener('click', () => { 
+    isSolidView = !isSolidView; 
+    updateShapeAndColorControls(); 
+});
+document.getElementById('toggleLabelsButton').addEventListener('click', () => { 
+    areLabelsVisible = !areLabelsVisible; 
+    document.getElementById('toggleLabelsButton').textContent = areLabelsVisible ? 'Hide Labels' : 'Show Labels';
+});
+document.getElementById('toggleFaceColorsButton').addEventListener('click', () => { 
+    if(isSolidView) { 
+        areFacesColored = !areFacesColored; 
+        updateShapeAndColorControls(); 
+    }
+});
+document.getElementById('separateCoresButton').addEventListener('click', () => { 
+    if (!areCoresSeparatingAnimating) { 
+        targetCoreSeparationState = !areCoresSeparated; 
+        areCoresSeparatingAnimating = true; 
+        coreSeparationLerpFactor = areCoresSeparated ? 1 : 0; 
+        updateShapeAndColorControls(); 
+    }
+});
+document.getElementById('separateCapsButton').addEventListener('click', () => { 
+    if (!areCapsSeparatingAnimating) { 
+        targetCapSeparationState = !areCapsSeparated; 
+        areCapsSeparatingAnimating = true; 
+        capSeparationLerpFactor = areCapsSeparated ? 1 : 0; 
+        updateShapeAndColorControls(); 
+    }
+});
 
+// --- Load and Unload (not changed) ---
 window.onload = performCalculationsAndSetupVisualization;
 window.addEventListener('beforeunload', () => {
     if (animationId) cancelAnimationFrame(animationId);
     if (renderer) renderer.dispose();
-    if (labelRenderer && labelRenderer.domElement.parentNode) labelRenderer.domElement.parentNode.removeChild(labelRenderer.domElement);
-    if (scene) scene.traverse(o => { if(o.geometry) o.geometry.dispose(); if(o.material) (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>m.dispose&&m.dispose()); });
+    if (scene) {
+        scene.traverse(o => { 
+            if(o.geometry) o.geometry.dispose(); 
+            if(o.material) {
+                (Array.isArray(o.material)?o.material:[o.material]).forEach(m => {
+                    if(m.dispose) m.dispose();
+                    if (m.map) m.map.dispose();
+                    if (m.lightMap) m.lightMap.dispose();
+                    if (m.bumpMap) m.bumpMap.dispose();
+                    if (m.normalMap) m.normalMap.dispose();
+                    if (m.specularMap) m.specularMap.dispose();
+                    if (m.envMap) m.envMap.dispose();
+                });
+            }
+        });
+    }
+    const canvasContainer = document.getElementById('canvasContainer');
+    if (canvasContainer) {
+        const labels = canvasContainer.querySelectorAll('.vertex-label');
+        labels.forEach(label => label.remove());
+    }
     window.removeEventListener('resize', onWindowResize);
 });
 </script>
